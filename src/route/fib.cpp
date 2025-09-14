@@ -67,15 +67,26 @@ Fib::addNextHopsToFibEntryAndNfd(FibEntry& entry, const NextHopsUriSortedSet& ho
   for (const auto& hop : hopsToAdd)
   {
     // Add nexthop to FIB entry
-    NLSR_LOG_DEBUG("Adding " << hop.getConnectingFaceUri() << " to " << entry.name);
+    NLSR_LOG_DEBUG("Adding " << hop << " to " << entry.name);
     entry.nexthopSet.addNextHop(hop);
 
     if (shouldRegister) {
       // Add nexthop to NDN-FIB
-      registerPrefix(name, ndn::FaceUri(hop.getConnectingFaceUri()),
-                     hop.getRouteCostAsAdjustedInteger(),
-                     ndn::time::seconds(m_refreshTime + GRACE_PERIOD),
-                     ndn::nfd::ROUTE_FLAG_CAPTURE, 0);
+      auto timeout = ndn::time::seconds(m_refreshTime + GRACE_PERIOD);
+      if (hop.getExpirationPeriod()) {
+        timeout = *hop.getExpirationPeriod();
+      }
+
+      if (hop.hasFaceId()) {
+        registerPrefix(name, hop.getFaceId(),
+                       hop.getRouteCostAsAdjustedInteger(),
+                       timeout, ndn::nfd::ROUTE_FLAG_CAPTURE, 0);
+      }
+      else {
+        registerPrefix(name, ndn::FaceUri(hop.getConnectingFaceUri()),
+                       hop.getRouteCostAsAdjustedInteger(),
+                       timeout, ndn::nfd::ROUTE_FLAG_CAPTURE, 0);
+      }
     }
   }
 }
@@ -192,8 +203,11 @@ Fib::registerPrefix(const ndn::Name& namePrefix, const ndn::FaceUri& faceUri,
      .setFaceId(faceId)
      .setFlags(flags)
      .setCost(faceCost)
-     .setExpirationPeriod(timeout)
      .setOrigin(ndn::nfd::ROUTE_ORIGIN_NLSR);
+
+    if (timeout > 0_ms) {
+      faceParameters.setExpirationPeriod(timeout);
+    }
 
     NLSR_LOG_DEBUG("Registering prefix: " << faceParameters.getName() << " faceUri: " << faceUri);
     m_controller.start<ndn::nfd::RibRegisterCommand>(faceParameters,
@@ -203,6 +217,38 @@ Fib::registerPrefix(const ndn::Name& namePrefix, const ndn::FaceUri& faceUri,
   }
   else {
     NLSR_LOG_WARN("Error: No Face Id for face uri: " << faceUri);
+  }
+}
+
+void
+Fib::registerPrefix(const ndn::Name& namePrefix, uint64_t faceId,
+                    uint64_t faceCost, const ndn::time::milliseconds& timeout,
+                    uint64_t flags, uint8_t times)
+{
+  if (faceId > 0) {
+    ndn::nfd::ControlParameters faceParameters;
+    faceParameters
+     .setName(namePrefix)
+     .setFaceId(faceId)
+     .setFlags(flags)
+     .setCost(faceCost)
+     .setOrigin(ndn::nfd::ROUTE_ORIGIN_NLSR);
+
+    if (timeout > 0_ms) {
+      faceParameters.setExpirationPeriod(timeout);
+    }
+
+    NLSR_LOG_DEBUG("Registering prefix: " << faceParameters.getName() << " faceId: " << faceId);
+    m_controller.start<ndn::nfd::RibRegisterCommand>(faceParameters,
+      [this, faceId] (const auto& params) {
+         NLSR_LOG_DEBUG("Successful in name registration: " << params.getName() <<
+                        " faceId: " << faceId);
+      },
+      std::bind(&Fib::onRegistrationFailure, this, _1,
+                faceParameters, faceId, times));
+  }
+  else {
+    NLSR_LOG_WARN("Error: Invalid Face Id: " << faceId);
   }
 }
 
@@ -232,6 +278,27 @@ Fib::onRegistrationFailure(const ndn::nfd::ControlResponse& response,
   if (times < 3) {
     NLSR_LOG_DEBUG("Trying to register again...");
     registerPrefix(parameters.getName(), faceUri,
+                   parameters.getCost(),
+                   parameters.getExpirationPeriod(),
+                   parameters.getFlags(), times+1);
+  }
+  else {
+    NLSR_LOG_DEBUG("Registration trial given up");
+  }
+}
+
+void
+Fib::onRegistrationFailure(const ndn::nfd::ControlResponse& response,
+                           const ndn::nfd::ControlParameters& parameters,
+                           uint64_t faceId,
+                           uint8_t times)
+{
+  NLSR_LOG_DEBUG("Failed in name registration: " << response.getText() <<
+                 " (code: " << response.getCode() << ")");
+  NLSR_LOG_DEBUG("Prefix: " << parameters.getName() << " failed for: " << +times);
+  if (times < 3) {
+    NLSR_LOG_DEBUG("Trying to register again...");
+    registerPrefix(parameters.getName(), faceId,
                    parameters.getCost(),
                    parameters.getExpirationPeriod(),
                    parameters.getFlags(), times+1);

@@ -136,6 +136,14 @@ public:
                  uint8_t times);
 
   void
+  registerPrefix(const ndn::Name& namePrefix,
+                 uint64_t faceId,
+                 uint64_t faceCost,
+                 const ndn::time::milliseconds& timeout,
+                 uint64_t flags,
+                 uint8_t times);
+
+  void
   setStrategy(const ndn::Name& name, const ndn::Name& strategy, uint32_t count);
 
   void
@@ -179,6 +187,12 @@ private:
   onRegistrationFailure(const ndn::nfd::ControlResponse& response,
                         const ndn::nfd::ControlParameters& parameters,
                         const ndn::FaceUri& faceUri,
+                        uint8_t times);
+
+  void
+  onRegistrationFailure(const ndn::nfd::ControlResponse& response,
+                        const ndn::nfd::ControlParameters& parameters,
+                        uint64_t faceId,
                         uint8_t times);
 
   /*! \brief Log a successful strategy setting.

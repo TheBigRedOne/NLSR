@@ -23,6 +23,7 @@
 #include "name-map.hpp"
 #include "nexthop.hpp"
 
+#include "lsa/fast-lsa.hpp"
 #include "adjacent.hpp"
 #include "logger.hpp"
 #include "nlsr.hpp"
@@ -343,6 +344,26 @@ addNextHopsToRoutingTable(RoutingTable& rt, const NameMap& map, int sourceRouter
   }
 }
 
+/**
+ * @brief Insert routes from FastLSAs into the routing table.
+ */
+void
+addFastLsaRoutes(RoutingTable& rt, const Lsdb& lsdb)
+{
+  NLSR_LOG_DEBUG("addFastLsaRoutes Called");
+  auto lsaRange = lsdb.getLsdbIterator<lsa::FastLsa>();
+  for (auto lsaIt = lsaRange.first; lsaIt != lsaRange.second; ++lsaIt) {
+    auto fastLsa = std::static_pointer_cast<lsa::FastLsa>(*lsaIt);
+    NLSR_LOG_DEBUG("Processing FastLSA for " << fastLsa->getName()
+                   << " via FaceID " << fastLsa->getFaceId());
+
+    // Create a direct route with cost 0 and short expiration
+    NextHop nh(fastLsa->getFaceId(), 0);
+    nh.setExpirationPeriod(fastLsa->getExpirationPeriod());
+    rt.addNextHop(fastLsa->getName(), nh);
+  }
+}
+
 } // anonymous namespace
 
 void
@@ -351,9 +372,12 @@ calculateLinkStateRoutingPath(NameMap& map, RoutingTable& rt, ConfParameter& con
 {
   NLSR_LOG_DEBUG("calculateLinkStateRoutingPath called");
 
+  // Add temporary routes from FastLSAs first to ensure they are prioritized.
+  addFastLsaRoutes(rt, lsdb);
+
   auto sourceRouter = map.getMappingNoByRouterName(confParam.getRouterPrefix());
   if (!sourceRouter) {
-    NLSR_LOG_DEBUG("Source router is absent, nothing to do");
+    NLSR_LOG_DEBUG("Source router is absent, regular link-state calculation skipped");
     return;
   }
 

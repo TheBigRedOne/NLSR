@@ -21,6 +21,12 @@
 
 #include "nfd-rib-command-processor.hpp"
 
+#include "lsa/name-lsa.hpp"
+#include "lsa/fast-lsa.hpp"
+#include <ndn-cxx/util/logging.hpp>
+
+NDN_LOG_INIT(nlsr.NfdRibCommandProcessor);
+
 namespace nlsr {
 namespace update {
 
@@ -32,12 +38,54 @@ NfdRibCommandProcessor::NfdRibCommandProcessor(ndn::mgmt::Dispatcher& dispatcher
   m_dispatcher.addControlCommand<ndn::nfd::ControlParameters>(makeRelPrefix("register"),
     ndn::mgmt::makeAcceptAllAuthorization(),
     std::bind(&NfdRibCommandProcessor::validateParameters<NfdRibRegisterCommand>, this, _1),
-    std::bind(&NfdRibCommandProcessor::advertiseAndInsertPrefix, this, _1, _2, _3, _4));
+    std::bind(&NfdRibCommandProcessor::processRibRegister, this, _1, _2, _3, _4));
 
   m_dispatcher.addControlCommand<ndn::nfd::ControlParameters>(makeRelPrefix("unregister"),
     ndn::mgmt::makeAcceptAllAuthorization(),
     std::bind(&NfdRibCommandProcessor::validateParameters<NfdRibUnregisterCommand>, this, _1),
     std::bind(&NfdRibCommandProcessor::withdrawAndRemovePrefix, this, _1, _2, _3, _4));
+}
+
+void
+NfdRibCommandProcessor::processRibRegister(const ndn::nfd::ControlParameters& params,
+                                           const ndn::nfd::ControlResponse& response,
+                                           ndn::mgmt::Dispatcher::Session& session,
+                                           ndn::mgmt::Dispatcher::Completion completion)
+{
+  if (params.getOrigin() == ndn::nfd::ROUTE_ORIGIN_OPTOFLOOD) {
+    NDN_LOG_DEBUG("Received OptoFlood RIB registration for " << params.getName());
+    this->generateFastLsa(params, response, session, completion);
+  }
+  else {
+    NDN_LOG_DEBUG("Received normal RIB registration for " << params.getName());
+    this->advertiseAndInsertPrefix(params, response, session, completion);
+  }
+}
+
+void
+NfdRibCommandProcessor::generateFastLsa(const ndn::nfd::ControlParameters& params,
+                                        const ndn::nfd::ControlResponse& response,
+                                        ndn::mgmt::Dispatcher::Session& session,
+                                        ndn::mgmt::Dispatcher::Completion completion)
+{
+  // 1. Create FastLsa
+  auto lsa = make_shared<lsa::FastLsa>();
+  lsa->setName(params.getName());
+  lsa->setOriginRouter(m_lsdb.getOriginRouter());
+  lsa->setFaceId(params.getFaceId());
+  lsa->setSequence(m_lsdb.getLsaSeq(lsa::Lsa::LsaType::FAST));
+  lsa->setExpirationPeriod(params.getExpirationPeriod());
+
+  // 2. Add to LSDB and flood
+  if (m_lsdb.addLsa(lsa)) {
+    NDN_LOG_INFO("Generated and flooding FastLSA for " << lsa->getName());
+  }
+  else {
+    NDN_LOG_DEBUG("Duplicate FastLSA for " << lsa->getName() << ", not flooding");
+  }
+
+  // 3. Send back response
+  session.send(response, completion);
 }
 
 } // namespace update

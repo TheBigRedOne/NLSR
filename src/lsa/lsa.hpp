@@ -51,11 +51,14 @@ public:
     using ndn::tlv::Error::Error;
   };
 
-  enum class Type {
-    ADJACENCY,
-    COORDINATE,
-    NAME,
-    BASE
+  /**
+   * @brief An enum for the LSA types.
+   */
+  enum class LsaType : uint64_t {
+    ADJ = 0,
+    NAME = 1,
+    COORDINATE = 2,
+    FAST = 3,
   };
 
 protected:

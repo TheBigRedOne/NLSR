@@ -24,6 +24,7 @@
 #include "logger.hpp"
 #include "nlsr.hpp"
 #include "utility/name-helper.hpp"
+#include "lsa/fast-lsa.hpp"
 
 #include <ndn-cxx/lp/tags.hpp>
 
@@ -552,6 +553,12 @@ Lsdb::afterFetchLsa(const ndn::ConstBufferPtr& bufferPtr, const ndn::Name& inter
         lsaIncrementSignal(Statistics::PacketType::RCV_COORD_LSA_DATA);
         if (isLsaNew(originRouter, interestedLsType, seqNo)) {
           installLsa(std::make_shared<CoordinateLsa>(block));
+        }
+      }
+      else if (interestedLsType == Lsa::Type::FAST) {
+        // (@th): Not sure if we need a new statistic for this.
+        if (isLsaNew(originRouter, interestedLsType, seqNo)) {
+          installLsa(std::make_shared<FastLsa>(block));
         }
       }
     }

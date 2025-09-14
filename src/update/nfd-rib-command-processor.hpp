@@ -38,6 +38,19 @@ public:
   NfdRibCommandProcessor(ndn::mgmt::Dispatcher& dispatcher,
                          NamePrefixList& namePrefixList,
                          Lsdb& lsdb);
+
+private:
+  void
+  processRibRegister(const ndn::nfd::ControlParameters& params,
+                     const ndn::nfd::ControlResponse& response,
+                     ndn::mgmt::Dispatcher::Session& session,
+                     ndn::mgmt::Dispatcher::Completion completion);
+
+  void
+  generateFastLsa(const ndn::nfd::ControlParameters& params,
+                  const ndn::nfd::ControlResponse& response,
+                  ndn::mgmt::Dispatcher::Session& session,
+                  ndn::mgmt::Dispatcher::Completion completion);
 };
 
 } // namespace update
