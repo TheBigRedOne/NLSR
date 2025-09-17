@@ -43,14 +43,14 @@ private:
   void
   processRibRegister(const ndn::nfd::ControlParameters& params,
                      const ndn::nfd::ControlResponse& response,
-                     ndn::mgmt::Dispatcher::Session& session,
-                     ndn::mgmt::Dispatcher::Completion completion);
+                     void* /*session*/,
+                     void* /*completion*/);
 
   void
   generateFastLsa(const ndn::nfd::ControlParameters& params,
                   const ndn::nfd::ControlResponse& response,
-                  ndn::mgmt::Dispatcher::Session& session,
-                  ndn::mgmt::Dispatcher::Completion completion);
+                  void* /*session*/,
+                  void* /*completion*/);
 };
 
 } // namespace update

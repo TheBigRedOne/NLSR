@@ -80,14 +80,15 @@ public:
   void
   setExpirationPeriod(ndn::time::milliseconds expirationPeriod);
 
-  virtual void
-  wireEncode(ndn::Block& block) const override;
+  // 覆盖基类编码接口
+  const ndn::Block&
+  wireEncode() const override;
 
-  virtual void
-  wireDecode(const ndn::Block& block) override;
+  void
+  wireDecode(const ndn::Block& block);
 
-  virtual ndn::Name
-  getFullName() const override;
+  ndn::Name
+  getFullName() const;
 
 private:
   ndn::Name m_name;

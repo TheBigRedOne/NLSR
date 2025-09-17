@@ -61,6 +61,9 @@ public:
     FAST = 3,
   };
 
+  // Backward-compatible alias to match legacy code usage
+  using Type = LsaType;
+
 protected:
   Lsa() = default;
 
@@ -74,7 +77,7 @@ public:
   virtual
   ~Lsa() = default;
 
-  virtual Type
+  virtual LsaType
   getType() const = 0;
 
   void
