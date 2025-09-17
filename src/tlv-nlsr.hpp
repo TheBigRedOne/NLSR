@@ -46,9 +46,6 @@ enum {
   NextHop                     = 143,
   RoutingTable                = 144,
   RoutingTableEntry           = 145,
-  FastLsa                     = 146,
-  FaceId                      = 147,
-  ExpirationPeriod            = 148,
 };
 
 } // namespace nlsr::tlv

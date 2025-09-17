@@ -51,18 +51,12 @@ public:
     using ndn::tlv::Error::Error;
   };
 
-  /**
-   * @brief An enum for the LSA types.
-   */
-  enum class LsaType : uint64_t {
-    ADJ = 0,
-    NAME = 1,
-    COORDINATE = 2,
-    FAST = 3,
+  enum class Type {
+    ADJACENCY,
+    COORDINATE,
+    NAME,
+    BASE
   };
-
-  // Backward-compatible alias to match legacy code usage
-  using Type = LsaType;
 
 protected:
   Lsa() = default;
@@ -77,7 +71,7 @@ public:
   virtual
   ~Lsa() = default;
 
-  virtual LsaType
+  virtual Type
   getType() const = 0;
 
   void

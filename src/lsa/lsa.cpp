@@ -114,21 +114,18 @@ std::ostream&
 operator<<(std::ostream& os, const Lsa::Type& type)
 {
   switch (type) {
-    case Lsa::LsaType::ADJ:
-      os << "ADJ";
-      break;
-    case Lsa::LsaType::NAME:
-      os << "NAME";
-      break;
-    case Lsa::LsaType::COORDINATE:
-      os << "COORDINATE";
-      break;
-    case Lsa::LsaType::FAST:
-      os << "FAST";
-      break;
-    default:
-      os << "UNKNOWN";
-      break;
+  case Lsa::Type::ADJACENCY:
+    os << "ADJACENCY";
+    break;
+  case Lsa::Type::COORDINATE:
+    os << "COORDINATE";
+    break;
+  case Lsa::Type::NAME:
+    os << "NAME";
+    break;
+  default:
+    os << "BASE";
+    break;
   }
   return os;
 }

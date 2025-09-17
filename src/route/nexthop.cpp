@@ -31,21 +31,8 @@ NextHop::wireEncode(ndn::EncodingImpl<TAG>& block) const
 {
   size_t totalLength = 0;
 
-  if (m_expirationPeriod) {
-    totalLength += ndn::encoding::prependNonNegativeIntegerBlock(
-      block, nlsr::tlv::ExpirationPeriod, m_expirationPeriod->count());
-  }
-
   totalLength += ndn::encoding::prependDoubleBlock(block, nlsr::tlv::CostDouble, m_routeCost);
-
-  if (hasFaceId()) {
-    totalLength += ndn::encoding::prependNonNegativeIntegerBlock(
-      block, nlsr::tlv::FaceId, m_faceId);
-  }
-  else {
-    totalLength += ndn::encoding::prependStringBlock(
-      block, nlsr::tlv::Uri, m_connectingFaceUri.toString());
-  }
+  totalLength += ndn::encoding::prependStringBlock(block, nlsr::tlv::Uri, m_connectingFaceUri.toString());
 
   totalLength += block.prependVarNumber(totalLength);
   totalLength += block.prependVarNumber(nlsr::tlv::NextHop);
@@ -77,9 +64,7 @@ void
 NextHop::wireDecode(const ndn::Block& wire)
 {
   m_connectingFaceUri = {};
-  m_faceId = 0;
   m_routeCost = 0;
-  m_expirationPeriod = std::nullopt;
 
   m_wire = wire;
 
@@ -100,12 +85,8 @@ NextHop::wireDecode(const ndn::Block& wire)
     }
     ++val;
   }
-  else if (val != m_wire.elements_end() && val->type() == nlsr::tlv::FaceId) {
-    m_faceId = ndn::encoding::readNonNegativeInteger(*val);
-    ++val;
-  }
   else {
-    NDN_THROW(Error("Missing required Uri or FaceId field"));
+    NDN_THROW(Error("Missing required Uri field"));
   }
 
   if (val != m_wire.elements_end() && val->type() == nlsr::tlv::CostDouble) {
@@ -115,24 +96,12 @@ NextHop::wireDecode(const ndn::Block& wire)
   else {
     NDN_THROW(Error("Missing required CostDouble field"));
   }
-
-  if (val != m_wire.elements_end() && val->type() == nlsr::tlv::ExpirationPeriod) {
-    m_expirationPeriod = ndn::time::milliseconds(ndn::encoding::readNonNegativeInteger(*val));
-    ++val;
-  }
 }
 
 std::ostream&
 operator<<(std::ostream& os, const NextHop& hop)
 {
-  os << "NextHop(";
-  if (hop.hasFaceId()) {
-    os << "FaceId: " << hop.getFaceId();
-  }
-  else {
-    os << "Uri: " << hop.getConnectingFaceUri();
-  }
-  os << ", Cost: " << hop.getRouteCost() << ")";
+  os << "NextHop(Uri: " << hop.getConnectingFaceUri() << ", Cost: " << hop.getRouteCost() << ")";
   return os;
 }
 

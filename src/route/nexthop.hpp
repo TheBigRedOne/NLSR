@@ -32,7 +32,6 @@
 
 #include <cmath>
 #include <ostream>
-#include <optional>
 
 namespace nlsr {
 
@@ -57,28 +56,10 @@ public:
   {
   }
 
-  NextHop(uint64_t faceId, double rc)
-    : m_faceId(faceId)
-    , m_routeCost(rc)
-  {
-  }
-
   explicit
   NextHop(const ndn::Block& block)
   {
     wireDecode(block);
-  }
-
-  bool
-  hasFaceId() const
-  {
-    return m_faceId != 0;
-  }
-
-  uint64_t
-  getFaceId() const
-  {
-    return m_faceId;
   }
 
   const ndn::FaceUri&
@@ -91,14 +72,6 @@ public:
   setConnectingFaceUri(const ndn::FaceUri& cfu)
   {
     m_connectingFaceUri = cfu;
-    m_faceId = 0;
-  }
-
-  void
-  setFaceId(uint64_t faceId)
-  {
-    m_faceId = faceId;
-    m_connectingFaceUri = ndn::FaceUri{};
   }
 
   uint64_t
@@ -139,18 +112,6 @@ public:
     return m_isHyperbolic;
   }
 
-  void
-  setExpirationPeriod(ndn::time::milliseconds expirationPeriod)
-  {
-    m_expirationPeriod = expirationPeriod;
-  }
-
-  const std::optional<ndn::time::milliseconds>&
-  getExpirationPeriod() const
-  {
-    return m_expirationPeriod;
-  }
-
   template<ndn::encoding::Tag TAG>
   size_t
   wireEncode(ndn::EncodingImpl<TAG>& block) const;
@@ -170,22 +131,19 @@ private: // non-member operators
   operator==(const NextHop& lhs, const NextHop& rhs)
   {
     return lhs.getRouteCostAsAdjustedInteger() == rhs.getRouteCostAsAdjustedInteger() &&
-           lhs.getFaceId() == rhs.getFaceId() &&
            lhs.getConnectingFaceUri() == rhs.getConnectingFaceUri();
   }
 
   friend bool
   operator<(const NextHop& lhs, const NextHop& rhs)
   {
-    return std::forward_as_tuple(lhs.getRouteCostAsAdjustedInteger(), lhs.getFaceId(), lhs.getConnectingFaceUri()) <
-           std::forward_as_tuple(rhs.getRouteCostAsAdjustedInteger(), rhs.getFaceId(), rhs.getConnectingFaceUri());
+    return std::forward_as_tuple(lhs.getRouteCostAsAdjustedInteger(), lhs.getConnectingFaceUri()) <
+           std::forward_as_tuple(rhs.getRouteCostAsAdjustedInteger(), rhs.getConnectingFaceUri());
   }
 
 private:
   ndn::FaceUri m_connectingFaceUri;
-  uint64_t m_faceId = 0;
   double m_routeCost = 0.0;
-  std::optional<ndn::time::milliseconds> m_expirationPeriod;
   bool m_isHyperbolic = false;
 
   mutable ndn::Block m_wire;
