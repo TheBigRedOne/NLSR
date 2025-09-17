@@ -142,7 +142,7 @@ Lsdb::scheduleAdjLsaBuild()
 void
 Lsdb::writeLog() const
 {
-  for (auto type : {Lsa::Type::COORDINATE, Lsa::Type::NAME, Lsa::Type::ADJACENCY}) {
+  for (auto type : {Lsa::Type::COORDINATE, Lsa::Type::NAME, Lsa::Type::ADJACENCY, Lsa::Type::FAST_PREFIX}) {
     if ((type == Lsa::Type::COORDINATE &&
          m_confParam.getHyperbolicState() == HYPERBOLIC_STATE_OFF) ||
         (type == Lsa::Type::ADJACENCY &&

@@ -46,6 +46,8 @@ enum {
   NextHop                     = 143,
   RoutingTable                = 144,
   RoutingTableEntry           = 145,
+  FastPrefixLsa               = 146,
+  FastPrefixEntry             = 147,
 };
 
 } // namespace nlsr::tlv

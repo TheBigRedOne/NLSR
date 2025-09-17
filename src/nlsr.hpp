@@ -34,6 +34,7 @@
 #include "route/routing-table.hpp"
 #include "update/prefix-update-processor.hpp"
 #include "update/nfd-rib-command-processor.hpp"
+#include "update/fast-lsa-commands.hpp"
 #include "utility/name-helper.hpp"
 #include "stats-collector.hpp"
 
@@ -195,6 +196,7 @@ private:
 PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   update::PrefixUpdateProcessor m_prefixUpdateProcessor;
   update::NfdRibCommandProcessor m_nfdRibCommandProcessor;
+  update::FastLsaCommandProcessor m_fastLsaCommandProcessor;
 
   StatsCollector m_statsCollector;
 

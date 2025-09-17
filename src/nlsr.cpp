@@ -77,6 +77,7 @@ Nlsr::Nlsr(ndn::Face& face, ndn::KeyChain& keyChain, ConfParameter& confParam)
       m_lsdb)
   , m_statsCollector(m_lsdb, m_helloProtocol)
   , m_faceMonitor(m_face)
+  , m_fastLsaCommandProcessor(m_dispatcher, m_lsdb, m_confParam)
 {
   NLSR_LOG_DEBUG("Initializing Nlsr");
 

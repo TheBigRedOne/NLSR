@@ -123,6 +123,9 @@ operator<<(std::ostream& os, const Lsa::Type& type)
   case Lsa::Type::NAME:
     os << "NAME";
     break;
+  case Lsa::Type::FAST_PREFIX:
+    os << "FAST_PREFIX";
+    break;
   default:
     os << "BASE";
     break;
@@ -143,6 +146,9 @@ operator>>(std::istream& is, Lsa::Type& type)
   }
   else if (typeString == "NAME") {
     type = Lsa::Type::NAME;
+  }
+  else if (typeString == "FAST_PREFIX") {
+    type = Lsa::Type::FAST_PREFIX;
   }
   else {
     type = Lsa::Type::BASE;

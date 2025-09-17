@@ -55,6 +55,7 @@ public:
     ADJACENCY,
     COORDINATE,
     NAME,
+    FAST_PREFIX,
     BASE
   };
 
