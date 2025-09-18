@@ -7,10 +7,12 @@ namespace nlsr::update {
 
 FastLsaCommandProcessor::FastLsaCommandProcessor(ndn::mgmt::Dispatcher& dispatcher,
                                                  Lsdb& lsdb,
-                                                 ConfParameter& confParam)
+                                                 ConfParameter& confParam,
+                                                 ndn::nfd::Controller& controller)
   : CommandManagerBase(dispatcher)
   , m_lsdb(lsdb)
   , m_confParam(confParam)
+  , m_controller(controller)
 {
   registerCommands();
 }
@@ -90,9 +92,7 @@ FastLsaCommandProcessor::handleTrigger(const ndn::mgmt::ControlParameters& param
              .setFaceId(params.getFaceId())
              .setExpirationPeriod(lifetime);
     // best-effort; errors ignored
-    try {
-      NfdRibCommandProcessor::registerRoute(m_lsdb, ribParams);
-    }
+    try { NfdRibCommandProcessor::registerRoute(m_controller, ribParams); }
     catch (...) {}
 
     // Schedule active unregister at expiration
@@ -100,7 +100,7 @@ FastLsaCommandProcessor::handleTrigger(const ndn::mgmt::ControlParameters& param
       auto unregisterParams = ndn::nfd::ControlParameters().setName(prefixes.front())
                                                               .setFaceId(params.getFaceId());
       m_lsdb.m_scheduler.schedule(lifetime, [this, unregisterParams] {
-        try { NfdRibCommandProcessor::unregisterRoute(m_lsdb, unregisterParams); }
+        try { NfdRibCommandProcessor::unregisterRoute(m_controller, unregisterParams); }
         catch (...) {}
       });
     }

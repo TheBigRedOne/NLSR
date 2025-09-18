@@ -9,6 +9,7 @@
 #include "nfd-rib-commands.hpp"
 
 #include <ndn-cxx/mgmt/dispatcher.hpp>
+#include <ndn-cxx/mgmt/nfd/controller.hpp>
 
 namespace nlsr::update {
 
@@ -17,7 +18,8 @@ class FastLsaCommandProcessor : public CommandManagerBase
 public:
   FastLsaCommandProcessor(ndn::mgmt::Dispatcher& dispatcher,
                           Lsdb& lsdb,
-                          ConfParameter& confParam);
+                          ConfParameter& confParam,
+                          ndn::nfd::Controller& controller);
 
 private:
   void
@@ -35,6 +37,7 @@ private:
   Lsdb& m_lsdb;
   ConfParameter& m_confParam;
   uint64_t m_fastSeq = 0;
+  ndn::nfd::Controller& m_controller;
   // simple de-dup and throttle
   std::unordered_map<ndn::Name, uint64_t, std::hash<ndn::Name>> m_lastSeqByPrefix;
   std::unordered_map<ndn::Name, ndn::time::steady_clock::time_point, std::hash<ndn::Name>> m_lastTriggerTime;

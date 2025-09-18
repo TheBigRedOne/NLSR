@@ -40,22 +40,20 @@ public:
                          Lsdb& lsdb);
 
   // Convenience helpers for local RIB operations
-  static void registerRoute(Lsdb& lsdb, const ndn::nfd::ControlParameters& params)
+  static void registerRoute(ndn::nfd::Controller& controller,
+                            const ndn::nfd::ControlParameters& params)
   {
-    ndn::mgmt::Dispatcher local(lsdb.m_face, lsdb.m_sequencingManager.getKeyChain());
-    update::NfdRibRegisterCommand cmd;
-    local.start<update::NfdRibRegisterCommand>(params,
-      [] (const auto&) {},
-      [] (const auto&) {});
+    controller.start<ndn::nfd::RibRegisterCommand>(params,
+      [] (const ndn::nfd::ControlParameters&) {},
+      [] (const ndn::nfd::ControlResponse&) {});
   }
 
-  static void unregisterRoute(Lsdb& lsdb, const ndn::nfd::ControlParameters& params)
+  static void unregisterRoute(ndn::nfd::Controller& controller,
+                              const ndn::nfd::ControlParameters& params)
   {
-    ndn::mgmt::Dispatcher local(lsdb.m_face, lsdb.m_sequencingManager.getKeyChain());
-    update::NfdRibUnregisterCommand cmd;
-    local.start<update::NfdRibUnregisterCommand>(params,
-      [] (const auto&) {},
-      [] (const auto&) {});
+    controller.start<ndn::nfd::RibUnregisterCommand>(params,
+      [] (const ndn::nfd::ControlParameters&) {},
+      [] (const ndn::nfd::ControlResponse&) {});
   }
 };
 
