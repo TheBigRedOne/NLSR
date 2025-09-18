@@ -1,5 +1,7 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 #include "fast-lsa-commands.hpp"
+#include "nfd-rib-command-processor.hpp"
+#include <functional>
 
 #include <ndn-cxx/mgmt/control-parameters.hpp>
 
@@ -21,15 +23,20 @@ void
 FastLsaCommandProcessor::registerCommands()
 {
   m_dispatcher.addControlCommand<ndn::nfd::ControlParameters>(
-    ndn::Name("/localhost/nlsr/fast-lsa/trigger"),
+    makeRelPrefix("trigger"),
     ndn::mgmt::makeAcceptAllAuthorization(),
-    std::bind(&FastLsaCommandProcessor::handleTrigger, this, _1, _2, _3, _4));
+    [] (const ndn::mgmt::ControlParameters&) { return true; },
+    std::bind(&FastLsaCommandProcessor::handleTrigger, this,
+              std::placeholders::_1,
+              std::placeholders::_2,
+              std::placeholders::_3,
+              std::placeholders::_4));
 }
 
 void
 FastLsaCommandProcessor::handleTrigger(const ndn::Name& prefix,
                                        const ndn::Interest& interest,
-                                       const ndn::mgmt::ControlParameters& params,
+                                       const ndn::mgmt::ControlParameters& parameters,
                                        const ndn::mgmt::CommandContinuation& done)
 {
   // Expected parameters encoded in ControlParameters:
@@ -37,6 +44,8 @@ FastLsaCommandProcessor::handleTrigger(const ndn::Name& prefix,
   // - ExpirationPeriod: LifetimeMs (optional, default 1000ms)
   // - FaceId: NeighborFaceId (optional, preferred)
   // - Cost: NewFaceSeq (optional)
+
+  const auto& params = static_cast<const ndn::nfd::ControlParameters&>(parameters);
 
   std::vector<ndn::Name> prefixes;
   if (params.hasName()) {
@@ -92,10 +101,10 @@ FastLsaCommandProcessor::handleTrigger(const ndn::Name& prefix,
 
     // Schedule active unregister at expiration
     try {
-      auto unregisterParams = ndn::nfd::ControlParameters().setName(prefixes.front())
-                                                              .setFaceId(params.getFaceId());
+      ndn::nfd::ControlParameters unregisterParams;
+      unregisterParams.setName(prefixes.front()).setFaceId(params.getFaceId());
       m_lsdb.schedule(lifetime, [this, unregisterParams] {
-        try { update::NfdRibCommandProcessor::unregisterRoute(m_controller, unregisterParams); }
+        try { NfdRibCommandProcessor::unregisterRoute(m_controller, unregisterParams); }
         catch (...) {}
       });
     }
