@@ -13,7 +13,7 @@
 
 namespace nlsr::update {
 
-class FastLsaCommandProcessor : public CommandManagerBase
+class FastLsaCommandProcessor : public ManagerBase
 {
 public:
   FastLsaCommandProcessor(ndn::mgmt::Dispatcher& dispatcher,
@@ -25,13 +25,11 @@ private:
   void
   registerCommands();
 
-  ndn::mgmt::Authorization
-  makeAuthorization();
-
   void
-  handleTrigger(const ndn::mgmt::ControlParameters& params,
+  handleTrigger(const ndn::Name& prefix,
                 const ndn::Interest& interest,
-                ndn::mgmt::StatusDatasetContext& context);
+                const ndn::mgmt::ControlParameters& parameters,
+                const ndn::mgmt::CommandContinuation& done);
 
 private:
   Lsdb& m_lsdb;

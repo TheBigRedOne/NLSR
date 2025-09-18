@@ -9,7 +9,7 @@ FastLsaCommandProcessor::FastLsaCommandProcessor(ndn::mgmt::Dispatcher& dispatch
                                                  Lsdb& lsdb,
                                                  ConfParameter& confParam,
                                                  ndn::nfd::Controller& controller)
-  : CommandManagerBase(dispatcher)
+  : ManagerBase(dispatcher, "fast-lsa")
   , m_lsdb(lsdb)
   , m_confParam(confParam)
   , m_controller(controller)
@@ -17,30 +17,20 @@ FastLsaCommandProcessor::FastLsaCommandProcessor(ndn::mgmt::Dispatcher& dispatch
   registerCommands();
 }
 
-ndn::mgmt::Authorization
-FastLsaCommandProcessor::makeAuthorization()
-{
-  return [] (const ndn::Name& prefix, const ndn::Interest& interest,
-             const ndn::mgmt::ControlParameters* params, const ndn::mgmt::CommandContinuation& cont) {
-    // Localhost-only
-    cont(ndn::mgmt::makeSuccess());
-  };
-}
-
 void
 FastLsaCommandProcessor::registerCommands()
 {
-  auto auth = makeAuthorization();
-  m_dispatcher.addControlCommandHandler(
+  m_dispatcher.addControlCommand<ndn::nfd::ControlParameters>(
     ndn::Name("/localhost/nlsr/fast-lsa/trigger"),
-    auth,
-    [this] (const auto& p, const auto& i, auto& c) { handleTrigger(p, i, c); });
+    ndn::mgmt::makeAcceptAllAuthorization(),
+    std::bind(&FastLsaCommandProcessor::handleTrigger, this, _1, _2, _3, _4));
 }
 
 void
-FastLsaCommandProcessor::handleTrigger(const ndn::mgmt::ControlParameters& params,
+FastLsaCommandProcessor::handleTrigger(const ndn::Name& prefix,
                                        const ndn::Interest& interest,
-                                       ndn::mgmt::StatusDatasetContext& context)
+                                       const ndn::mgmt::ControlParameters& params,
+                                       const ndn::mgmt::CommandContinuation& done)
 {
   // Expected parameters encoded in ControlParameters:
   // - Name: Prefix (required)
@@ -52,9 +42,12 @@ FastLsaCommandProcessor::handleTrigger(const ndn::mgmt::ControlParameters& param
   if (params.hasName()) {
     prefixes.push_back(params.getName());
   }
+  else if (!prefix.empty()) {
+    prefixes.push_back(prefix);
+  }
   else {
-    context.reject(400, "Missing Prefix name");
-    return;
+    ndn::nfd::ControlResponse resp; resp.setCode(400).setText("Missing Prefix name");
+    return done(resp);
   }
 
   ndn::time::milliseconds lifetime = 1000_ms;
@@ -71,7 +64,8 @@ FastLsaCommandProcessor::handleTrigger(const ndn::mgmt::ControlParameters& param
   auto nowSteady = ndn::time::steady_clock::now();
   auto itLast = m_lastTriggerTime.find(prefixes.front());
   if (itLast != m_lastTriggerTime.end() && (nowSteady - itLast->second) < 500_ms) {
-    context.append(ndn::Block()); context.end(); return;
+    ndn::nfd::ControlResponse resp; resp.setCode(202).setText("throttled");
+    return done(resp);
   }
   m_lastTriggerTime[prefixes.front()] = nowSteady;
 
@@ -79,7 +73,8 @@ FastLsaCommandProcessor::handleTrigger(const ndn::mgmt::ControlParameters& param
   if (newFaceSeq) {
     auto itSeq = m_lastSeqByPrefix.find(prefixes.front());
     if (itSeq != m_lastSeqByPrefix.end() && itSeq->second >= *newFaceSeq) {
-      context.append(ndn::Block()); context.end(); return;
+      ndn::nfd::ControlResponse resp; resp.setCode(202).setText("dedup");
+      return done(resp);
     }
     m_lastSeqByPrefix[prefixes.front()] = *newFaceSeq;
   }
@@ -92,15 +87,15 @@ FastLsaCommandProcessor::handleTrigger(const ndn::mgmt::ControlParameters& param
              .setFaceId(params.getFaceId())
              .setExpirationPeriod(lifetime);
     // best-effort; errors ignored
-    try { NfdRibCommandProcessor::registerRoute(m_controller, ribParams); }
+    try { update::NfdRibCommandProcessor::registerRoute(m_controller, ribParams); }
     catch (...) {}
 
     // Schedule active unregister at expiration
     try {
       auto unregisterParams = ndn::nfd::ControlParameters().setName(prefixes.front())
                                                               .setFaceId(params.getFaceId());
-      m_lsdb.m_scheduler.schedule(lifetime, [this, unregisterParams] {
-        try { NfdRibCommandProcessor::unregisterRoute(m_controller, unregisterParams); }
+      m_lsdb.schedule(lifetime, [this, unregisterParams] {
+        try { update::NfdRibCommandProcessor::unregisterRoute(m_controller, unregisterParams); }
         catch (...) {}
       });
     }
@@ -111,10 +106,9 @@ FastLsaCommandProcessor::handleTrigger(const ndn::mgmt::ControlParameters& param
                                              now + lifetime, prefixes,
                                              std::nullopt, newFaceSeq);
 
-  m_lsdb.installLsa(lsa);
-
-  context.append(ndn::Block());
-  context.end();
+  m_lsdb.installLsaPublic(lsa);
+  ndn::nfd::ControlResponse resp; resp.setCode(200).setText("OK");
+  done(resp);
 }
 
 } // namespace nlsr::update
