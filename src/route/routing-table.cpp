@@ -134,21 +134,8 @@ RoutingTable::calculateLsRoutingTable()
 
   calculateLinkStateRoutingPath(map, *this, m_confParam, m_lsdb);
 
-  // Fast-LSA 覆盖层（优先临时下一跳）：
-  // 对存在 FAST_PREFIX 的前缀，若能解析到邻接，则直接注入下一跳
-  {
-    auto range = m_lsdb.getLsdbIterator<FastPrefixLsa>();
-    for (auto it = range.first; it != range.second; ++it) {
-      auto flsa = std::static_pointer_cast<FastPrefixLsa>(*it);
-      const auto& nbr = flsa->getNeighborRouterName();
-      if (!nbr) continue;
-      for (const auto& pfx : flsa->getPrefixes()) {
-        // 将覆盖行为映射为对目的=邻居路由器的下一跳注入
-        NextHop nh(*nbr, /*faceId*/0, /*cost*/0);
-        addNextHop(*nbr, nh);
-      }
-    }
-  }
+  // Fast-LSA 覆盖层（占位）：
+  // 当前阶段未实现 NeighborRouterName→FaceUri 映射，暂不注入临时下一跳。
 
   NLSR_LOG_DEBUG("Calling Update NPT With new Route");
   afterRoutingChange(m_rTable);

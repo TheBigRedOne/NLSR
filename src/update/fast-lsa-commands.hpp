@@ -6,6 +6,7 @@
 #include "../lsdb.hpp"
 #include "../lsa/fast-prefix-lsa.hpp"
 #include "../conf-parameter.hpp"
+#include "nfd-rib-commands.hpp"
 
 #include <ndn-cxx/mgmt/dispatcher.hpp>
 
@@ -34,6 +35,9 @@ private:
   Lsdb& m_lsdb;
   ConfParameter& m_confParam;
   uint64_t m_fastSeq = 0;
+  // simple de-dup and throttle
+  std::unordered_map<ndn::Name, uint64_t, std::hash<ndn::Name>> m_lastSeqByPrefix;
+  std::unordered_map<ndn::Name, ndn::time::steady_clock::time_point, std::hash<ndn::Name>> m_lastTriggerTime;
 };
 
 } // namespace nlsr::update

@@ -38,6 +38,25 @@ public:
   NfdRibCommandProcessor(ndn::mgmt::Dispatcher& dispatcher,
                          NamePrefixList& namePrefixList,
                          Lsdb& lsdb);
+
+  // Convenience helpers for local RIB operations
+  static void registerRoute(Lsdb& lsdb, const ndn::nfd::ControlParameters& params)
+  {
+    ndn::mgmt::Dispatcher local(lsdb.m_face, lsdb.m_sequencingManager.getKeyChain());
+    update::NfdRibRegisterCommand cmd;
+    local.start<update::NfdRibRegisterCommand>(params,
+      [] (const auto&) {},
+      [] (const auto&) {});
+  }
+
+  static void unregisterRoute(Lsdb& lsdb, const ndn::nfd::ControlParameters& params)
+  {
+    ndn::mgmt::Dispatcher local(lsdb.m_face, lsdb.m_sequencingManager.getKeyChain());
+    update::NfdRibUnregisterCommand cmd;
+    local.start<update::NfdRibUnregisterCommand>(params,
+      [] (const auto&) {},
+      [] (const auto&) {});
+  }
 };
 
 } // namespace update

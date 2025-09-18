@@ -40,10 +40,10 @@ FastLsaCommandProcessor::handleTrigger(const ndn::mgmt::ControlParameters& param
                                        const ndn::Interest& interest,
                                        ndn::mgmt::StatusDatasetContext& context)
 {
-  // Expected parameters encoded in Name/Parameters:
+  // Expected parameters encoded in ControlParameters:
   // - Name: Prefix (required)
-  // - ExpirationPeriod: LifetimeMs (optional)
-  // - FaceId: NeighborFaceId (optional)
+  // - ExpirationPeriod: LifetimeMs (optional, default 1000ms)
+  // - FaceId: NeighborFaceId (optional, preferred)
   // - Cost: NewFaceSeq (optional)
 
   std::vector<ndn::Name> prefixes;
@@ -65,13 +65,51 @@ FastLsaCommandProcessor::handleTrigger(const ndn::mgmt::ControlParameters& param
     newFaceSeq = static_cast<uint32_t>(params.getCost());
   }
 
-  std::optional<ndn::Name> neighborRouterName;
-  // NeighborFaceId is optional; mapping FaceId->NeighborName 可在阶段二完善
+  // Throttle per prefix (simple): 1 trigger / 500ms
+  auto nowSteady = ndn::time::steady_clock::now();
+  auto itLast = m_lastTriggerTime.find(prefixes.front());
+  if (itLast != m_lastTriggerTime.end() && (nowSteady - itLast->second) < 500_ms) {
+    context.append(ndn::Block()); context.end(); return;
+  }
+  m_lastTriggerTime[prefixes.front()] = nowSteady;
+
+  // De-dup by NewFaceSeq when provided: ignore if not newer
+  if (newFaceSeq) {
+    auto itSeq = m_lastSeqByPrefix.find(prefixes.front());
+    if (itSeq != m_lastSeqByPrefix.end() && itSeq->second >= *newFaceSeq) {
+      context.append(ndn::Block()); context.end(); return;
+    }
+    m_lastSeqByPrefix[prefixes.front()] = *newFaceSeq;
+  }
 
   auto now = ndn::time::system_clock::now();
+  // Attempt to register short-lived FIB via RIB if FaceId provided
+  if (params.hasFaceId()) {
+    ndn::nfd::ControlParameters ribParams;
+    ribParams.setName(prefixes.front())
+             .setFaceId(params.getFaceId())
+             .setExpirationPeriod(lifetime);
+    // best-effort; errors ignored
+    try {
+      NfdRibCommandProcessor::registerRoute(m_lsdb, ribParams);
+    }
+    catch (...) {}
+
+    // Schedule active unregister at expiration
+    try {
+      auto unregisterParams = ndn::nfd::ControlParameters().setName(prefixes.front())
+                                                              .setFaceId(params.getFaceId());
+      m_lsdb.m_scheduler.schedule(lifetime, [this, unregisterParams] {
+        try { NfdRibCommandProcessor::unregisterRoute(m_lsdb, unregisterParams); }
+        catch (...) {}
+      });
+    }
+    catch (...) {}
+  }
+
   auto lsa = std::make_shared<FastPrefixLsa>(m_confParam.getRouterPrefix(), ++m_fastSeq,
                                              now + lifetime, prefixes,
-                                             neighborRouterName, newFaceSeq);
+                                             std::nullopt, newFaceSeq);
 
   m_lsdb.installLsa(lsa);
 
