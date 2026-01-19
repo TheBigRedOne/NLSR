@@ -94,6 +94,7 @@ FastLsaCommandProcessor::handleTrigger(const ndn::Name& prefix,
     ndn::nfd::ControlParameters ribParams;
     ribParams.setName(prefixes.front())
              .setFaceId(params.getFaceId())
+             .setOrigin(ndn::nfd::ROUTE_ORIGIN_OPTOFLOOD)
              .setExpirationPeriod(lifetime);
     // best-effort; errors ignored
     try { update::NfdRibCommandProcessor::registerRoute(m_controller, ribParams); }
@@ -102,7 +103,9 @@ FastLsaCommandProcessor::handleTrigger(const ndn::Name& prefix,
     // Schedule active unregister at expiration
     try {
       ndn::nfd::ControlParameters unregisterParams;
-      unregisterParams.setName(prefixes.front()).setFaceId(params.getFaceId());
+      unregisterParams.setName(prefixes.front())
+                     .setFaceId(params.getFaceId())
+                     .setOrigin(ndn::nfd::ROUTE_ORIGIN_OPTOFLOOD);
       m_lsdb.schedule(lifetime, [this, unregisterParams] {
         try { NfdRibCommandProcessor::unregisterRoute(m_controller, unregisterParams); }
         catch (...) {}
