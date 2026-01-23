@@ -24,8 +24,10 @@
 #include "logger.hpp"
 #include "nlsr.hpp"
 #include "routing-table.hpp"
+#include "lsa/fast-prefix-lsa.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <list>
 #include <utility>
 
@@ -60,6 +62,81 @@ NamePrefixTable::~NamePrefixTable()
   m_afterLsdbModified.disconnect();
 }
 
+bool
+NamePrefixTable::PrefixRouteKey::operator==(const PrefixRouteKey& other) const
+{
+  return prefix == other.prefix && destRouter == other.destRouter;
+}
+
+size_t
+NamePrefixTable::PrefixRouteKeyHash::operator()(const PrefixRouteKey& key) const noexcept
+{
+  size_t h1 = std::hash<ndn::Name>{}(key.prefix);
+  size_t h2 = std::hash<ndn::Name>{}(key.destRouter);
+  return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));
+}
+
+NamePrefixTable::PrefixSource
+NamePrefixTable::getSourceForLsaType(Lsa::Type type) const
+{
+  switch (type) {
+  case Lsa::Type::NAME:
+    return PrefixSource::NAME_LSA;
+  case Lsa::Type::FAST_PREFIX:
+    return PrefixSource::FAST_PREFIX;
+  case Lsa::Type::ADJACENCY:
+    return PrefixSource::ADJACENCY_LSA;
+  case Lsa::Type::COORDINATE:
+    return PrefixSource::COORDINATE_LSA;
+  default:
+    return PrefixSource::OTHER_LSA;
+  }
+}
+
+bool
+NamePrefixTable::addSource(const ndn::Name& name, const ndn::Name& destRouter, PrefixSource source)
+{
+  PrefixRouteKey key{name, destRouter};
+  SourceMask& mask = m_prefixSources[key];
+  SourceMask prev = mask;
+  mask |= toMask(source);
+  return prev == 0;
+}
+
+bool
+NamePrefixTable::removeSource(const ndn::Name& name, const ndn::Name& destRouter, PrefixSource source)
+{
+  PrefixRouteKey key{name, destRouter};
+  auto it = m_prefixSources.find(key);
+  if (it == m_prefixSources.end()) {
+    return false;
+  }
+  it->second &= static_cast<SourceMask>(~toMask(source));
+  if (it->second != 0) {
+    return false;
+  }
+  m_prefixSources.erase(it);
+  return true;
+}
+
+void
+NamePrefixTable::addEntryWithSource(const ndn::Name& name, const ndn::Name& destRouter, PrefixSource source)
+{
+  if (!addSource(name, destRouter, source)) {
+    return;
+  }
+  addEntry(name, destRouter);
+}
+
+void
+NamePrefixTable::removeEntryWithSource(const ndn::Name& name, const ndn::Name& destRouter, PrefixSource source)
+{
+  if (!removeSource(name, destRouter, source)) {
+    return;
+  }
+  removeEntry(name, destRouter);
+}
+
 void
 NamePrefixTable::updateFromLsdb(std::shared_ptr<Lsa> lsa, LsdbUpdate updateType,
                                 const std::list<ndn::Name>& namesToAdd,
@@ -70,42 +147,61 @@ NamePrefixTable::updateFromLsdb(std::shared_ptr<Lsa> lsa, LsdbUpdate updateType,
   }
   NLSR_LOG_TRACE("Got update from Lsdb for router: " << lsa->getOriginRouter());
 
-  if (updateType == LsdbUpdate::INSTALLED) {
-    addEntry(lsa->getOriginRouter(), lsa->getOriginRouter());
+  PrefixSource originSource = getSourceForLsaType(lsa->getType());
 
-    if (lsa->getType() == Lsa::Type::NAME) {
+  if (updateType == LsdbUpdate::INSTALLED) {
+    addEntryWithSource(lsa->getOriginRouter(), lsa->getOriginRouter(), originSource);
+
+    if (lsa->getType() == Lsa::Type::FAST_PREFIX) {
+      auto flsa = std::static_pointer_cast<FastPrefixLsa>(lsa);
+      for (const auto& name : flsa->getPrefixes()) {
+        if (name != m_ownRouterName) {
+          addEntryWithSource(name, lsa->getOriginRouter(), PrefixSource::FAST_PREFIX);
+        }
+      }
+    }
+    else if (lsa->getType() == Lsa::Type::NAME) {
       auto nlsa = std::static_pointer_cast<NameLsa>(lsa);
       for (const auto& name : nlsa->getNpl().getNames()) {
         if (name != m_ownRouterName) {
-          addEntry(name, lsa->getOriginRouter());
+          addEntryWithSource(name, lsa->getOriginRouter(), PrefixSource::NAME_LSA);
         }
       }
     }
   }
   else if (updateType == LsdbUpdate::UPDATED) {
-    if (lsa->getType() != Lsa::Type::NAME) {
+    if (lsa->getType() != Lsa::Type::NAME &&
+        lsa->getType() != Lsa::Type::FAST_PREFIX) {
       return;
     }
 
     for (const auto& name : namesToAdd) {
       if (name != m_ownRouterName) {
-        addEntry(name, lsa->getOriginRouter());
+        addEntryWithSource(name, lsa->getOriginRouter(), getSourceForLsaType(lsa->getType()));
       }
     }
 
     for (const auto& name : namesToRemove) {
       if (name != m_ownRouterName) {
-        removeEntry(name, lsa->getOriginRouter());
+        removeEntryWithSource(name, lsa->getOriginRouter(), getSourceForLsaType(lsa->getType()));
       }
     }
   }
   else {
-    removeEntry(lsa->getOriginRouter(), lsa->getOriginRouter());
-    if (lsa->getType() == Lsa::Type::NAME) {
+    removeEntryWithSource(lsa->getOriginRouter(), lsa->getOriginRouter(), originSource);
+    if (lsa->getType() == Lsa::Type::FAST_PREFIX) {
+      auto flsa = std::static_pointer_cast<FastPrefixLsa>(lsa);
+      for (const auto& name : flsa->getPrefixes()) {
+        if (name != m_ownRouterName) {
+          removeEntryWithSource(name, lsa->getOriginRouter(), PrefixSource::FAST_PREFIX);
+        }
+      }
+    }
+    else if (lsa->getType() == Lsa::Type::NAME) {
       auto nlsa = std::static_pointer_cast<NameLsa>(lsa);
       for (const auto& name : nlsa->getNpl().getNames()) {
         if (name != m_ownRouterName) {
-          removeEntry(name, lsa->getOriginRouter());
+          removeEntryWithSource(name, lsa->getOriginRouter(), PrefixSource::NAME_LSA);
         }
       }
     }

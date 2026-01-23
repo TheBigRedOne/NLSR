@@ -29,6 +29,7 @@
 #include "route/fib.hpp"
 #include "lsdb.hpp"
 
+#include <cstdint>
 #include <list>
 #include <unordered_map>
 
@@ -138,11 +139,59 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   NptEntryList m_table;
 
 private:
+  enum class PrefixSource : uint8_t
+  {
+    NAME_LSA = 1 << 0,
+    FAST_PREFIX = 1 << 1,
+    ADJACENCY_LSA = 1 << 2,
+    COORDINATE_LSA = 1 << 3,
+    OTHER_LSA = 1 << 4
+  };
+
+  using SourceMask = uint8_t;
+
+  static constexpr SourceMask
+  toMask(PrefixSource source)
+  {
+    return static_cast<SourceMask>(source);
+  }
+
+  struct PrefixRouteKey
+  {
+    ndn::Name prefix;
+    ndn::Name destRouter;
+
+    bool
+    operator==(const PrefixRouteKey& other) const;
+  };
+
+  struct PrefixRouteKeyHash
+  {
+    size_t
+    operator()(const PrefixRouteKey& key) const noexcept;
+  };
+
+  void
+  addEntryWithSource(const ndn::Name& name, const ndn::Name& destRouter, PrefixSource source);
+
+  void
+  removeEntryWithSource(const ndn::Name& name, const ndn::Name& destRouter, PrefixSource source);
+
+  PrefixSource
+  getSourceForLsaType(Lsa::Type type) const;
+
+  bool
+  addSource(const ndn::Name& name, const ndn::Name& destRouter, PrefixSource source);
+
+  bool
+  removeSource(const ndn::Name& name, const ndn::Name& destRouter, PrefixSource source);
+
   const ndn::Name& m_ownRouterName;
   Fib& m_fib;
   RoutingTable& m_routingTable;
   ndn::signal::Connection m_afterRoutingChangeConnection;
   ndn::signal::Connection m_afterLsdbModified;
+  std::unordered_map<PrefixRouteKey, SourceMask, PrefixRouteKeyHash> m_prefixSources;
 };
 
 inline NamePrefixTable::const_iterator

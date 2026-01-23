@@ -118,6 +118,7 @@ FastLsaCommandProcessor::handleTrigger(const ndn::Name& prefix,
                                              now + lifetime, prefixes,
                                              std::nullopt, newFaceSeq);
 
+  m_lsdb.getSync().publishRoutingUpdate(Lsa::Type::FAST_PREFIX, m_fastSeq);
   m_lsdb.installLsaPublic(lsa);
   ndn::nfd::ControlResponse resp; resp.setCode(200).setText("OK");
   done(resp);

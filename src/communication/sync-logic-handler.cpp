@@ -38,10 +38,12 @@ SyncLogicHandler::SyncLogicHandler(ndn::Face& face, ndn::KeyChain& keyChain,
   , m_nameLsaUserPrefix(makeLsaUserPrefix(opts.userPrefix, Lsa::Type::NAME))
   , m_adjLsaUserPrefix(makeLsaUserPrefix(opts.userPrefix, Lsa::Type::ADJACENCY))
   , m_coorLsaUserPrefix(makeLsaUserPrefix(opts.userPrefix, Lsa::Type::COORDINATE))
+  , m_fastPrefixLsaUserPrefix(makeLsaUserPrefix(opts.userPrefix, Lsa::Type::FAST_PREFIX))
   , m_syncLogic(face, keyChain, opts.syncProtocol, opts.syncPrefix,
                 m_nameLsaUserPrefix, opts.syncInterestLifetime,
                 std::bind(&SyncLogicHandler::processUpdate, this, _1, _2, _3))
 {
+  m_syncLogic.addUserNode(m_fastPrefixLsaUserPrefix);
   if (m_hyperbolicState != HYPERBOLIC_STATE_ON) {
     m_syncLogic.addUserNode(m_adjLsaUserPrefix);
   }
@@ -119,6 +121,9 @@ SyncLogicHandler::publishRoutingUpdate(Lsa::Type type, uint64_t seqNo)
     break;
   case Lsa::Type::NAME:
     m_syncLogic.publishUpdate(m_nameLsaUserPrefix, seqNo);
+    break;
+  case Lsa::Type::FAST_PREFIX:
+    m_syncLogic.publishUpdate(m_fastPrefixLsaUserPrefix, seqNo);
     break;
   default:
     break;
