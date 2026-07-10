@@ -115,7 +115,6 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   ndn::Name m_nameLsaUserPrefix;
   ndn::Name m_adjLsaUserPrefix;
   ndn::Name m_coorLsaUserPrefix;
-  ndn::Name m_fastPrefixLsaUserPrefix;
 
   SyncProtocolAdapter m_syncLogic;
 };

@@ -142,7 +142,6 @@ private:
   enum class PrefixSource : uint8_t
   {
     NAME_LSA = 1 << 0,
-    FAST_PREFIX = 1 << 1,
     ADJACENCY_LSA = 1 << 2,
     COORDINATE_LSA = 1 << 3,
     OTHER_LSA = 1 << 4

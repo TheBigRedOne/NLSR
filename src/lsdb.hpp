@@ -59,17 +59,6 @@ enum class LsdbUpdate {
 class Lsdb
 {
 public:
-  // lightweight public helpers for sched/installation used by Fast-LSA
-  template<typename Callback>
-  void schedule(ndn::time::milliseconds delay, Callback&& cb)
-  {
-    m_scheduler.schedule(delay, std::forward<Callback>(cb));
-  }
-
-  void installLsaPublic(std::shared_ptr<Lsa> lsa)
-  {
-    installLsa(std::move(lsa));
-  }
   Lsdb(ndn::Face& face, ndn::KeyChain& keyChain, ConfParameter& confParam);
 
   ~Lsdb();

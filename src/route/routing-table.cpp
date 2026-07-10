@@ -134,9 +134,6 @@ RoutingTable::calculateLsRoutingTable()
 
   calculateLinkStateRoutingPath(map, *this, m_confParam, m_lsdb);
 
-  // Fast-LSA 覆盖层（占位）：
-  // 当前阶段未实现 NeighborRouterName→FaceUri 映射，暂不注入临时下一跳。
-
   NLSR_LOG_DEBUG("Calling Update NPT With new Route");
   afterRoutingChange(m_rTable);
   NLSR_LOG_DEBUG(*this);
