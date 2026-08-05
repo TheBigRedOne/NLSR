@@ -76,6 +76,7 @@ Nlsr::Nlsr(ndn::Face& face, ndn::KeyChain& keyChain, ConfParameter& confParam)
       m_namePrefixList,
       m_lsdb)
   , m_statsCollector(m_lsdb, m_helloProtocol)
+  , m_routeReadyNotifier(m_face, m_lsdb)
   , m_faceMonitor(m_face)
 {
   NLSR_LOG_DEBUG("Initializing Nlsr");

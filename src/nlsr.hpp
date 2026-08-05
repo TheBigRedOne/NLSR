@@ -27,6 +27,7 @@
 #include "hello-protocol.hpp"
 #include "lsdb.hpp"
 #include "name-prefix-list.hpp"
+#include "route-ready-notifier.hpp"
 #include "test-access-control.hpp"
 #include "publisher/dataset-interest-handler.hpp"
 #include "route/fib.hpp"
@@ -197,6 +198,7 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   update::NfdRibCommandProcessor m_nfdRibCommandProcessor;
 
   StatsCollector m_statsCollector;
+  RouteReadyNotifier m_routeReadyNotifier;
 
 private:
   ndn::nfd::FaceMonitor m_faceMonitor;
