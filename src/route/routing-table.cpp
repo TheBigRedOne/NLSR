@@ -128,6 +128,15 @@ RoutingTable::calculateNow()
     return;
   }
 
+  if (m_hyperbolicState != HYPERBOLIC_STATE_ON && m_lsdb.getIsBuildAdjLsaScheduled()) {
+    // A pending build is about to change this router's own adjacencies, so a
+    // link-state calculation started now would be skipped. Withdrawing the scheduled
+    // one would then delay it for no gain, and installing the built LSA prompts a
+    // fresh request anyway.
+    NLSR_LOG_DEBUG("Deferring the immediate routing table calculation: adjacency build is scheduled");
+    return;
+  }
+
   if (m_isRouteCalculationScheduled) {
     NLSR_LOG_DEBUG("Cancelling the scheduled routing table calculation");
     m_scheduledCalculation.cancel();
