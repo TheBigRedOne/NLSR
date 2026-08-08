@@ -127,6 +127,21 @@ public:
   void
   scheduleRoutingTableCalculation();
 
+  /*! \brief Runs the calculation at once, replacing any calculation already scheduled.
+   *
+   *  Intended for callers that already know the database holds the information the
+   *  next calculation is waiting for, so that the routing-calculation interval need
+   *  not elapse first. The calculation itself is the ordinary one: the same database,
+   *  the same algorithm and the same downstream update of the name-prefix table.
+   *
+   *  At most one calculation runs and at most one is pending at any time. A request
+   *  arriving while a calculation is running is recorded and drained by that
+   *  calculation, since the running pass may have read the database before the change
+   *  that prompted the request.
+   */
+  void
+  calculateNow();
+
 private:
   /*! \brief Calculates a link-state routing table. */
   void
@@ -153,6 +168,10 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   ndn::time::seconds m_routingCalcInterval;
   bool m_isRoutingTableCalculating;
   bool m_isRouteCalculationScheduled;
+  /// Held so that calculateNow() can withdraw a calculation that is already scheduled.
+  ndn::scheduler::ScopedEventId m_scheduledCalculation;
+  /// A calculateNow() request that arrived while a calculation was running.
+  bool m_isImmediateCalculationPending = false;
 
   ConfParameter& m_confParam;
   ndn::signal::Connection m_afterLsdbModified;

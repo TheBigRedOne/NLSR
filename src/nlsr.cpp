@@ -27,12 +27,24 @@
 #include <cstdio>
 #include <unistd.h>
 
+#include <ndn-cxx/lp/nack.hpp>
 #include <ndn-cxx/mgmt/nfd/status-dataset.hpp>
 #include <ndn-cxx/net/face-uri.hpp>
 
 namespace nlsr {
 
 INIT_LOGGER(Nlsr);
+
+namespace {
+
+/*! Local signal prefix consumed by the forwarder's OptoFlood module:
+ *  /localhost/nfd/optoflood/route-ready/<prefix>. The forwarder consumes the Interest
+ *  without answering it, so it is expressed fire-and-forget with a short lifetime.
+ */
+const ndn::Name ROUTE_READY_PREFIX("/localhost/nfd/optoflood/route-ready");
+constexpr ndn::time::milliseconds ROUTE_READY_LIFETIME = 1_s;
+
+} // namespace
 
 Nlsr::Nlsr(ndn::Face& face, ndn::KeyChain& keyChain, ConfParameter& confParam)
   : m_face(face)
@@ -76,7 +88,17 @@ Nlsr::Nlsr(ndn::Face& face, ndn::KeyChain& keyChain, ConfParameter& confParam)
       m_namePrefixList,
       m_lsdb)
   , m_statsCollector(m_lsdb, m_helloProtocol)
-  , m_routeReadyNotifier(m_face, m_lsdb)
+  , m_topologyObserver(m_lsdb)
+  , m_onOriginReachable(m_topologyObserver.originReachable.connect(
+      [this] (const ndn::Name& originRouter) {
+        announceRouteReady(originRouter);
+      }))
+  , m_onOriginSettled(m_topologyObserver.originSettled.connect(
+      [this] (const ndn::Name& originRouter) {
+        NLSR_LOG_DEBUG("Adjacency change of " << originRouter
+                       << " is fully reflected; recalculating now");
+        m_routingTable.calculateNow();
+      }))
   , m_faceMonitor(m_face)
 {
   NLSR_LOG_DEBUG("Initializing Nlsr");
@@ -332,6 +354,31 @@ Nlsr::onFaceDatasetFetchTimeout(uint32_t code,
     // interval.  Since this is a backup mechanism, we aren't as
     // concerned with retrying.
     scheduleDatasetFetch();
+  }
+}
+
+void
+Nlsr::announceRouteReady(const ndn::Name& originRouter)
+{
+  auto nameLsa = m_lsdb.findLsa<NameLsa>(originRouter);
+  if (nameLsa == nullptr) {
+    return;
+  }
+
+  for (const auto& prefix : nameLsa->getNpl().getNames()) {
+    ndn::Name signalName(ROUTE_READY_PREFIX);
+    signalName.append(prefix);
+
+    ndn::Interest interest(signalName);
+    interest.setCanBePrefix(false);
+    interest.setMustBeFresh(true);
+    interest.setInterestLifetime(ROUTE_READY_LIFETIME);
+    m_face.expressInterest(interest,
+                           [] (const ndn::Interest&, const ndn::Data&) {},
+                           [] (const ndn::Interest&, const ndn::lp::Nack&) {},
+                           [] (const ndn::Interest&) {});
+
+    NLSR_LOG_DEBUG("Announced route-ready for " << prefix << " of router " << originRouter);
   }
 }
 

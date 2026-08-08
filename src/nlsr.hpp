@@ -27,8 +27,8 @@
 #include "hello-protocol.hpp"
 #include "lsdb.hpp"
 #include "name-prefix-list.hpp"
-#include "route-ready-notifier.hpp"
 #include "test-access-control.hpp"
+#include "topology-change-observer.hpp"
 #include "publisher/dataset-interest-handler.hpp"
 #include "route/fib.hpp"
 #include "route/name-prefix-table.hpp"
@@ -145,6 +145,16 @@ private:
   void
   onFaceEventNotification(const ndn::nfd::FaceEventNotification& faceEventNotification);
 
+  /*! \brief Tells the local forwarder that this router's database now supports
+   *         reaching \p originRouter, for each prefix that router originates.
+   *
+   *  The signal authorises the forwarder to release temporary forwarding state kept
+   *  across the change. It neither installs nor withdraws a route, and it stays on
+   *  the local host.
+   */
+  void
+  announceRouteReady(const ndn::Name& originRouter);
+
   void
   scheduleDatasetFetch();
 
@@ -198,9 +208,11 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   update::NfdRibCommandProcessor m_nfdRibCommandProcessor;
 
   StatsCollector m_statsCollector;
-  RouteReadyNotifier m_routeReadyNotifier;
+  TopologyChangeObserver m_topologyObserver;
 
 private:
+  ndn::signal::ScopedConnection m_onOriginReachable;
+  ndn::signal::ScopedConnection m_onOriginSettled;
   ndn::nfd::FaceMonitor m_faceMonitor;
 };
 

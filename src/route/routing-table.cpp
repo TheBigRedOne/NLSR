@@ -104,10 +104,38 @@ RoutingTable::calculate()
 
     m_isRouteCalculationScheduled = false;
     m_isRoutingTableCalculating = false;
+
+    // Drain a calculateNow() request that arrived while this pass was running. The
+    // flag is cleared first, so a request made during the follow-up pass is drained
+    // by that pass rather than by this one.
+    if (m_isImmediateCalculationPending) {
+      m_isImmediateCalculationPending = false;
+      NLSR_LOG_DEBUG("Running the routing table calculation requested during the last one");
+      calculate();
+    }
   }
   else {
     scheduleRoutingTableCalculation();
   }
+}
+
+void
+RoutingTable::calculateNow()
+{
+  if (m_isRoutingTableCalculating) {
+    m_isImmediateCalculationPending = true;
+    NLSR_LOG_DEBUG("Immediate routing table calculation queued behind a running one");
+    return;
+  }
+
+  if (m_isRouteCalculationScheduled) {
+    NLSR_LOG_DEBUG("Cancelling the scheduled routing table calculation");
+    m_scheduledCalculation.cancel();
+    m_isRouteCalculationScheduled = false;
+  }
+
+  NLSR_LOG_DEBUG("Calculating routing table immediately");
+  calculate();
 }
 
 void
@@ -168,7 +196,7 @@ RoutingTable::scheduleRoutingTableCalculation()
 {
   if (!m_isRouteCalculationScheduled) {
     NLSR_LOG_DEBUG("Scheduling routing table calculation in " << m_routingCalcInterval);
-    m_scheduler.schedule(m_routingCalcInterval, [this] { calculate(); });
+    m_scheduledCalculation = m_scheduler.schedule(m_routingCalcInterval, [this] { calculate(); });
     m_isRouteCalculationScheduled = true;
   }
 }
