@@ -71,6 +71,15 @@ public:
   void
   publishUpdate(const ndn::Name& userPrefix, uint64_t seq);
 
+  /*! \brief Ask the sync protocol to rebuild its outstanding state at once.
+   *
+   * Called when the set of reachable neighbours has changed, so that a peer which has
+   * just become reachable is synchronized without waiting for the periodic exchange.
+   * Protocols that offer no such entry point ignore it.
+   */
+  void
+  triggerSync();
+
 PUBLIC_WITH_TESTS_ELSE_PRIVATE:
 #ifdef HAVE_CHRONOSYNC
    /*! \brief Hook function to call whenever ChronoSync detects new data.

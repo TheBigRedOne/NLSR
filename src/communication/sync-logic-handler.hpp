@@ -81,6 +81,18 @@ public:
   void
   publishRoutingUpdate(Lsa::Type type, uint64_t seqNo);
 
+  /*! \brief Ask sync to rebuild its outstanding state at once.
+   *
+   * Used when a neighbour has just become reachable: full sync distributes an update
+   * by satisfying the sync Interests neighbours already have pending, and a peer that
+   * was unreachable a moment ago has none.
+   */
+  void
+  triggerSync()
+  {
+    m_syncLogic.triggerSync();
+  }
+
 PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   /*! \brief Callback from Sync protocol
    *

@@ -107,6 +107,29 @@ SyncProtocolAdapter::addUserNode(const ndn::Name& userPrefix)
 }
 
 void
+SyncProtocolAdapter::triggerSync()
+{
+  switch (m_syncProtocol) {
+#ifdef HAVE_CHRONOSYNC
+  case SyncProtocol::CHRONOSYNC:
+    // No equivalent entry point; the protocol keeps its own recovery schedule.
+    break;
+#endif // HAVE_CHRONOSYNC
+#ifdef HAVE_PSYNC
+  case SyncProtocol::PSYNC:
+    m_psyncLogic->triggerSync();
+    break;
+#endif // HAVE_PSYNC
+#ifdef HAVE_SVS
+  case SyncProtocol::SVS:
+    break;
+#endif // HAVE_SVS
+  default:
+    NDN_CXX_UNREACHABLE;
+  }
+}
+
+void
 SyncProtocolAdapter::publishUpdate(const ndn::Name& userPrefix, uint64_t seq)
 {
   switch (m_syncProtocol) {

@@ -65,6 +65,17 @@ Nlsr::Nlsr(ndn::Face& face, ndn::KeyChain& keyChain, ConfParameter& confParam)
       }))
   , m_onPrefixRegistrationSuccess(m_fib.onPrefixRegistrationSuccess.connect(
       [this] (const ndn::Name& name) {
+        if (name == m_confParam.getSyncPrefix()) {
+          // The sync prefix now forwards towards a neighbour that was unreachable a
+          // moment ago. Full sync distributes an update by satisfying the sync
+          // Interests neighbours already have pending, and this one has none, so its
+          // first exchange would otherwise wait for the periodic re-expression.
+          // Registration success is the earliest point at which the forwarder can
+          // carry the Interest there; the adjacency becoming active is not, because
+          // the route is installed asynchronously afterwards.
+          NLSR_LOG_DEBUG("Sync prefix registered on a new face; rebuilding sync state");
+          m_lsdb.getSync().triggerSync();
+        }
         m_helloProtocol.sendHelloInterest(name);
       }))
   , m_onInitialHelloDataValidated(m_helloProtocol.onInitialHelloDataValidated.connect(
