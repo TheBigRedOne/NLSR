@@ -58,6 +58,7 @@ RoutingTable::RoutingTable(ndn::Scheduler& scheduler, Lsdb& lsdb, ConfParameter&
         clearRoutingTable();
         clearDryRoutingTable();
         NLSR_LOG_DEBUG("Calling Update NPT With new Route");
+        m_afterRoutingChangeFromCalculation = false;
         afterRoutingChange(m_rTable);
         NLSR_LOG_DEBUG(*this);
         m_ownAdjLsaExist = false;
@@ -172,6 +173,7 @@ RoutingTable::calculateLsRoutingTable()
   calculateLinkStateRoutingPath(map, *this, m_confParam, m_lsdb);
 
   NLSR_LOG_DEBUG("Calling Update NPT With new Route");
+  m_afterRoutingChangeFromCalculation = true;
   afterRoutingChange(m_rTable);
   NLSR_LOG_DEBUG(*this);
 }
@@ -195,6 +197,7 @@ RoutingTable::calculateHypRoutingTable(bool isDryRun)
 
   if (!isDryRun) {
     NLSR_LOG_DEBUG("Calling Update NPT With new Route");
+    m_afterRoutingChangeFromCalculation = true;
     afterRoutingChange(m_rTable);
     NLSR_LOG_DEBUG(*this);
   }

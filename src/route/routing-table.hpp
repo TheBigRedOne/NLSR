@@ -142,6 +142,26 @@ public:
   void
   calculateNow();
 
+  /*! \brief Whether a routing-table calculation is currently executing. */
+  bool
+  isRoutingTableCalculating() const
+  {
+    return m_isRoutingTableCalculating;
+  }
+
+  /*! \brief True if the most recent afterRoutingChange was emitted by Dijkstra/HR
+   *         calculation rather than by clearing the table on own Adj-LSA removal.
+   *
+   *  Consuming the flag clears it, so each emit is observed at most once.
+   */
+  bool
+  consumeAfterRoutingChangeFromCalculation()
+  {
+    const bool fromCalculation = m_afterRoutingChangeFromCalculation;
+    m_afterRoutingChangeFromCalculation = false;
+    return fromCalculation;
+  }
+
 private:
   /*! \brief Calculates a link-state routing table. */
   void
@@ -172,6 +192,8 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   ndn::scheduler::ScopedEventId m_scheduledCalculation;
   /// A calculateNow() request that arrived while a calculation was running.
   bool m_isImmediateCalculationPending = false;
+  /// Distinguishes calculation emits from own-Adj-LSA-removal table clears.
+  bool m_afterRoutingChangeFromCalculation = false;
 
   ConfParameter& m_confParam;
   ndn::signal::Connection m_afterLsdbModified;

@@ -49,6 +49,9 @@
 #include <ndn-cxx/security/key-chain.hpp>
 #include <ndn-cxx/util/scheduler.hpp>
 
+#include <cstdint>
+#include <map>
+
 namespace nlsr {
 
 class Nlsr
@@ -145,15 +148,25 @@ private:
   void
   onFaceEventNotification(const ndn::nfd::FaceEventNotification& faceEventNotification);
 
-  /*! \brief Tells the local forwarder that this router's database now supports
-   *         reaching \p originRouter, for each prefix that router originates.
+  /*! \brief After a post-new-path routing calculation, tell the local forwarder that
+   *         ordinary routing has absorbed a new reciprocal adjacency for \p originRouter.
    *
-   *  The signal authorises the forwarder to release temporary forwarding state kept
-   *  across the change. It neither installs nor withdraws a route, and it stays on
-   *  the local host.
+   *  Emits /localhost/nfd/optoflood/new-path-calculated/<serial>/<prefix> for each
+   *  prefix in the origin's Name LSA. This is a freshness proof only; it does not
+   *  claim NFD RIB/FIB management commands have completed.
    */
   void
-  announceRouteReady(const ndn::Name& originRouter);
+  announceNewPathCalculated(const ndn::Name& originRouter, uint64_t calcSerial);
+
+  /*! \brief Enqueue \p originRouter until a routing calculation that can reflect its
+   *         new reciprocal adjacency has completed, then request calculateNow().
+   */
+  void
+  awaitNewPathCalculation(const ndn::Name& originRouter);
+
+  /*! \brief Complete pending new-path proofs after an actual afterRoutingChange. */
+  void
+  onRoutingCalculationCompleted();
 
   void
   scheduleDatasetFetch();
@@ -211,9 +224,15 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   TopologyChangeObserver m_topologyObserver;
 
 private:
-  ndn::signal::ScopedConnection m_onOriginReachable;
   ndn::signal::ScopedConnection m_onOriginSettled;
+  ndn::signal::ScopedConnection m_onAfterRoutingChange;
   ndn::nfd::FaceMonitor m_faceMonitor;
+
+  /// Origins whose non-empty added adjacencies are reciprocal and await a completed calc.
+  /// Value is the completed-calc serial that must be exceeded before the proof may emit.
+  std::map<ndn::Name, uint64_t> m_awaitingNewPathCalc;
+  /// Monotonic count of completed routing calculations that emitted afterRoutingChange.
+  uint64_t m_routingCalcSerial = 0;
 };
 
 } // namespace nlsr

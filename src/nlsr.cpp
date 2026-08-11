@@ -37,12 +37,13 @@ INIT_LOGGER(Nlsr);
 
 namespace {
 
-/*! Local signal prefix consumed by the forwarder's OptoFlood module:
- *  /localhost/nfd/optoflood/route-ready/<prefix>. The forwarder consumes the Interest
- *  without answering it, so it is expressed fire-and-forget with a short lifetime.
+/*! Local OptoFlood freshness proof:
+ *  /localhost/nfd/optoflood/new-path-calculated/<serial>/<prefix>.
+ *  Serial is the completed routing-calculation counter. The forwarder consumes the
+ *  Interest without answering; NLSR expresses it fire-and-forget.
  */
-const ndn::Name ROUTE_READY_PREFIX("/localhost/nfd/optoflood/route-ready");
-constexpr ndn::time::milliseconds ROUTE_READY_LIFETIME = 1_s;
+const ndn::Name NEW_PATH_CALCULATED_PREFIX("/localhost/nfd/optoflood/new-path-calculated");
+constexpr ndn::time::milliseconds NEW_PATH_CALCULATED_LIFETIME = 1_s;
 
 } // namespace
 
@@ -100,15 +101,18 @@ Nlsr::Nlsr(ndn::Face& face, ndn::KeyChain& keyChain, ConfParameter& confParam)
       m_lsdb)
   , m_statsCollector(m_lsdb, m_helloProtocol)
   , m_topologyObserver(m_lsdb)
-  , m_onOriginReachable(m_topologyObserver.originReachable.connect(
-      [this] (const ndn::Name& originRouter) {
-        announceRouteReady(originRouter);
-      }))
   , m_onOriginSettled(m_topologyObserver.originSettled.connect(
-      [this] (const ndn::Name& originRouter) {
+      [this] (const ndn::Name& originRouter, bool hasAddedAdjacency) {
+        if (hasAddedAdjacency) {
+          awaitNewPathCalculation(originRouter);
+        }
         NLSR_LOG_DEBUG("Adjacency change of " << originRouter
                        << " is fully reflected; recalculating now");
         m_routingTable.calculateNow();
+      }))
+  , m_onAfterRoutingChange(m_routingTable.afterRoutingChange.connect(
+      [this] (const std::list<RoutingTableEntry>&) {
+        onRoutingCalculationCompleted();
       }))
   , m_faceMonitor(m_face)
 {
@@ -369,27 +373,71 @@ Nlsr::onFaceDatasetFetchTimeout(uint32_t code,
 }
 
 void
-Nlsr::announceRouteReady(const ndn::Name& originRouter)
+Nlsr::awaitNewPathCalculation(const ndn::Name& originRouter)
+{
+  // A calculation already in flight may have read the LSDB before this adjacency
+  // became reciprocal. Require one completed afterRoutingChange beyond that pass
+  // (or beyond the last completed serial when idle).
+  const uint64_t barrier = m_routingTable.isRoutingTableCalculating()
+                           ? m_routingCalcSerial + 1
+                           : m_routingCalcSerial;
+  m_awaitingNewPathCalc[originRouter] = barrier;
+  NLSR_LOG_DEBUG("Awaiting post-new-path calculation for " << originRouter
+                 << " barrier-serial=" << barrier);
+}
+
+void
+Nlsr::onRoutingCalculationCompleted()
+{
+  // Own Adj-LSA removal clears the table and emits afterRoutingChange without a
+  // Dijkstra/HR pass. That must not satisfy a new-path-calculated barrier.
+  if (!m_routingTable.consumeAfterRoutingChangeFromCalculation()) {
+    NLSR_LOG_DEBUG("Ignoring afterRoutingChange not produced by routing calculation");
+    return;
+  }
+
+  ++m_routingCalcSerial;
+  NLSR_LOG_DEBUG("Routing calculation completed serial=" << m_routingCalcSerial);
+
+  for (auto it = m_awaitingNewPathCalc.begin(); it != m_awaitingNewPathCalc.end(); ) {
+    if (m_routingCalcSerial > it->second) {
+      const ndn::Name origin = it->first;
+      it = m_awaitingNewPathCalc.erase(it);
+      announceNewPathCalculated(origin, m_routingCalcSerial);
+    }
+    else {
+      ++it;
+    }
+  }
+}
+
+void
+Nlsr::announceNewPathCalculated(const ndn::Name& originRouter, uint64_t calcSerial)
 {
   auto nameLsa = m_lsdb.findLsa<NameLsa>(originRouter);
   if (nameLsa == nullptr) {
+    NLSR_LOG_DEBUG("Skipping new-path-calculated for " << originRouter
+                   << ": Name LSA not present");
     return;
   }
 
   for (const auto& prefix : nameLsa->getNpl().getNames()) {
-    ndn::Name signalName(ROUTE_READY_PREFIX);
+    ndn::Name signalName(NEW_PATH_CALCULATED_PREFIX);
+    signalName.appendNumber(calcSerial);
     signalName.append(prefix);
 
     ndn::Interest interest(signalName);
     interest.setCanBePrefix(false);
     interest.setMustBeFresh(true);
-    interest.setInterestLifetime(ROUTE_READY_LIFETIME);
+    interest.setInterestLifetime(NEW_PATH_CALCULATED_LIFETIME);
     m_face.expressInterest(interest,
                            [] (const ndn::Interest&, const ndn::Data&) {},
                            [] (const ndn::Interest&, const ndn::lp::Nack&) {},
                            [] (const ndn::Interest&) {});
 
-    NLSR_LOG_DEBUG("Announced route-ready for " << prefix << " of router " << originRouter);
+    NLSR_LOG_DEBUG("Announced new-path-calculated prefix=" << prefix
+                   << " serial=" << calcSerial
+                   << " origin=" << originRouter);
   }
 }
 

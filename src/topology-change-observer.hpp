@@ -66,16 +66,19 @@ public:
   /*! \brief The origin router declares an adjacency that the neighbour declares in
    *         return, so the routing calculation will find a path to it.
    *
-   *  Sufficient for releasing forwarding state that exists to cover the change.
+   *  Weaker than originSettled: one reciprocal adjacency is enough. OptoFlood does
+   *  not use this signal for TFIB handoff.
    */
   ndn::signal::Signal<TopologyChangeObserver, ndn::Name> originReachable;
 
-  /*! \brief Every adjacency added by the change is declared by both endpoints, so a
-   *         calculation run now yields the result the change leads to.
+  /*! \brief Every adjacency added by the change is declared by both endpoints.
    *
-   *  Stronger than originReachable, which one pre-existing adjacency can satisfy.
+   *  The second argument is true when the settled change gained at least one
+   *  adjacency (non-empty added). Removal-only changes settle with false: they
+   *  still warrant an ordinary routing recalculation, but they are not a
+   *  new-path-calculated proof for OptoFlood TFIB handoff.
    */
-  ndn::signal::Signal<TopologyChangeObserver, ndn::Name> originSettled;
+  ndn::signal::Signal<TopologyChangeObserver, ndn::Name, bool> originSettled;
 
 PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   void

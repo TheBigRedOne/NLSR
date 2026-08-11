@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <utility>
 #include <vector>
 
 namespace nlsr {
@@ -148,7 +149,7 @@ TopologyChangeObserver::evaluatePending()
   // The facts are collected first and reported afterwards, so that a consumer is free
   // to act in ways that reach back into this observer without invalidating the walk.
   std::vector<ndn::Name> reachable;
-  std::vector<ndn::Name> settled;
+  std::vector<std::pair<ndn::Name, bool>> settled;
 
   for (auto it = m_pending.begin(); it != m_pending.end(); ) {
     const ndn::Name& router = it->first;
@@ -159,7 +160,7 @@ TopologyChangeObserver::evaluatePending()
     }
 
     if (areAllReciprocal(router, it->second.added)) {
-      settled.push_back(router);
+      settled.emplace_back(router, !it->second.added.empty());
       it = m_pending.erase(it);
     }
     else {
@@ -171,9 +172,16 @@ TopologyChangeObserver::evaluatePending()
     NLSR_LOG_DEBUG("Router " << router << " is reachable through a reciprocal adjacency");
     originReachable(router);
   }
-  for (const auto& router : settled) {
-    NLSR_LOG_DEBUG("Every adjacency added by " << router << " is reciprocal");
-    originSettled(router);
+  for (const auto& [router, hasAdded] : settled) {
+    if (hasAdded) {
+      NLSR_LOG_DEBUG("Every adjacency added by " << router
+                     << " is reciprocal (new-path candidate)");
+    }
+    else {
+      NLSR_LOG_DEBUG("Adjacency removals by " << router
+                     << " are reflected (removal-only; not a new-path candidate)");
+    }
+    originSettled(router, hasAdded);
   }
 }
 
