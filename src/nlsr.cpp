@@ -110,9 +110,50 @@ Nlsr::Nlsr(ndn::Face& face, ndn::KeyChain& keyChain, ConfParameter& confParam)
                        << " is fully reflected; recalculating now");
         m_routingTable.calculateNow();
       }))
+  , m_onTransitionResolved(m_transitionController.onTransitionResolved.connect(
+      [this] (uint64_t generation) {
+        if (!m_confParam.getResultDrivenAdjLsaBuild()) {
+          return;
+        }
+
+        const uint64_t completionSerial = m_transitionController.getCompletionSerial();
+        auto stillValid = [this, generation, completionSerial] {
+          return m_transitionController.canCompleteSuccess(generation)
+                 && m_transitionController.getCompletionSerial() == completionSerial;
+        };
+
+        if (!stillValid()) {
+          NLSR_LOG_DEBUG("Skipping result-driven Adj-LSA build for generation=" << generation
+                         << "; success completion is no longer valid");
+          return;
+        }
+
+        NLSR_LOG_DEBUG("Adjacency transition generation=" << generation
+                       << " is resolved; building the Adjacency LSA now");
+        m_lsdb.requestImmediateAdjLsaBuild(stillValid);
+
+        if (!stillValid()) {
+          NLSR_LOG_DEBUG("Success completion for generation=" << generation
+                         << " was invalidated during immediate build; keeping publication authority");
+          return;
+        }
+
+        m_transitionController.releasePublicationAuthorityAfterSuccess(generation);
+        // Clear suppression; if the immediate build could not run (e.g. not yet
+        // buildable), re-arm the ordinary delay for any remaining dirty count.
+        m_lsdb.resumeOrdinaryAdjLsaBuildAfterAbort();
+      }))
+  , m_onTransitionAborted(m_transitionController.onTransitionAborted.connect(
+      [this] (uint64_t generation) {
+        NLSR_LOG_DEBUG("Adjacency transition generation=" << generation
+                       << " aborted; restoring ordinary Adj-LSA scheduling");
+        m_lsdb.resumeOrdinaryAdjLsaBuildAfterAbort();
+      }))
   , m_faceMonitor(m_face)
 {
   NLSR_LOG_DEBUG("Initializing Nlsr");
+
+  m_helloProtocol.setTransitionController(&m_transitionController);
 
   m_faceMonitor.onNotification.connect(std::bind(&Nlsr::onFaceEventNotification, this, _1));
   m_faceMonitor.start();

@@ -89,6 +89,11 @@ ConfParameter::writeLog()
   // Event Intervals
   NLSR_LOG_INFO("Adjacency LSA build interval:  " << m_adjLsaBuildInterval);
   NLSR_LOG_INFO("Routing calculation interval:  " << m_routingCalcInterval);
+
+  NLSR_LOG_INFO("Event-driven adjacency verification: "
+                << (m_isEventDrivenAdjacencyVerificationEnabled ? "on" : "off"));
+  NLSR_LOG_INFO("Result-driven Adjacency LSA build:   "
+                << (m_isResultDrivenAdjLsaBuildEnabled ? "on" : "off"));
 }
 
 void

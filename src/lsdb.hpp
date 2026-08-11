@@ -44,6 +44,8 @@
 #include <boost/multi_index/composite_key.hpp>
 #include <boost/multi_index/hashed_index.hpp>
 
+#include <functional>
+
 namespace nlsr {
 
 namespace bmi = boost::multi_index;
@@ -86,6 +88,33 @@ public:
   /*! \brief Schedules a build of this router's LSA. */
   void
   scheduleAdjLsaBuild();
+
+  /*! \brief Carries out a scheduled Adjacency LSA build now, in place of its delay.
+   *
+   *  The delay exists so that the adjacency changes of one topology change are absorbed
+   *  into a single LSA. A caller that can establish that those changes are resolved
+   *  provides that guarantee directly, leaving the delay to postpone the result only.
+   *
+   *  Does nothing when no build is outstanding, so a caller arriving after the delayed
+   *  build has already run does not publish a second LSA with the same content.
+   *
+   *  \param stillValid when provided, is evaluated immediately before building; if it
+   *         returns false the build is skipped (stale success completion).
+   */
+  void
+  requestImmediateAdjLsaBuild(std::function<bool()> stillValid = nullptr);
+
+  /*! \brief Suppresses ordinary delayed Adj-LSA publication while a transition holds
+   *         publication authority. Dirty build counts are retained.
+   */
+  void
+  setOrdinaryAdjLsaPublishSuppressed(bool isSuppressed);
+
+  /*! \brief Clears ordinary-publish suppression and, if a build remains dirty, arms the
+   *         normal adj-lsa-build-interval delay (abort / fallback path).
+   */
+  void
+  resumeOrdinaryAdjLsaBuildAfterAbort();
 
   void
   writeLog() const;
@@ -263,7 +292,7 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
     neighbor.
    */
   void
-  buildAdjLsa();
+  buildAdjLsa(bool allowWhileSuppressed = false);
 
   /*! \brief Wrapper event to build and install an adj. LSA for this router. */
   void
@@ -364,6 +393,7 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   ndn::InMemoryStorageFifo m_segmentFifo;
 
   bool m_isBuildAdjLsaScheduled;
+  bool m_ordinaryAdjLsaPublishSuppressed = false;
   int64_t m_adjBuildCount;
   ndn::scheduler::ScopedEventId m_scheduledAdjLsaBuild;
 

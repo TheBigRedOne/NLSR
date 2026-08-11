@@ -39,6 +39,32 @@ namespace bf = boost::filesystem;
 
 namespace nlsr {
 
+namespace {
+
+/*! \brief Reads an on/off switch from \p section into \p value.
+ *  \param key the configuration key; absent means off, so a configuration that does not
+ *         mention the key keeps the unmodified behaviour.
+ *  \return false when the key is present with a value other than "on" or "off".
+ */
+bool
+parseSwitch(const ConfigSection& section, const std::string& key, bool& value)
+{
+  std::string setting = section.get<std::string>(key, "off");
+  if (setting == "on") {
+    value = true;
+    return true;
+  }
+  if (setting == "off") {
+    value = false;
+    return true;
+  }
+
+  std::cerr << "Invalid value for " << key << ". Allowed values: on, off" << std::endl;
+  return false;
+}
+
+} // namespace
+
 template <class T>
 class ConfigurationVariable
 {
@@ -443,6 +469,22 @@ ConfFileProcessor::processConfSectionNeighbors(const ConfigSection& section)
   if (!adjLsaBuildInterval.parseFromConfigSection(section)) {
     return false;
   }
+
+  // event-driven-adjacency-verification
+  bool isEventDrivenVerificationEnabled = false;
+  if (!parseSwitch(section, "event-driven-adjacency-verification",
+                   isEventDrivenVerificationEnabled)) {
+    return false;
+  }
+  m_confParam.setEventDrivenAdjacencyVerification(isEventDrivenVerificationEnabled);
+
+  // result-driven-adj-lsa-build
+  bool isResultDrivenBuildEnabled = false;
+  if (!parseSwitch(section, "result-driven-adj-lsa-build", isResultDrivenBuildEnabled)) {
+    return false;
+  }
+  m_confParam.setResultDrivenAdjLsaBuild(isResultDrivenBuildEnabled);
+
   // Set the retry count for fetching the FaceStatus dataset
   ConfigurationVariable<uint32_t> faceDatasetFetchTries("face-dataset-fetch-tries",
                                                         std::bind(&ConfParameter::setFaceDatasetFetchTries,
