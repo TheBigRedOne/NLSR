@@ -129,13 +129,6 @@ Lsdb::scheduleAdjLsaBuild()
     return;
   }
 
-  if (m_ordinaryAdjLsaPublishSuppressed) {
-    NLSR_LOG_DEBUG("Adjacency LSA build deferred; transition holds publication authority");
-    m_scheduledAdjLsaBuild.cancel();
-    m_isBuildAdjLsaScheduled = false;
-    return;
-  }
-
   if (m_isBuildAdjLsaScheduled) {
     NLSR_LOG_DEBUG("Rescheduling Adjacency LSA build in " << m_adjLsaBuildInterval);
   }
@@ -147,38 +140,7 @@ Lsdb::scheduleAdjLsaBuild()
 }
 
 void
-Lsdb::setOrdinaryAdjLsaPublishSuppressed(bool isSuppressed)
-{
-  m_ordinaryAdjLsaPublishSuppressed = isSuppressed;
-  if (isSuppressed) {
-    NLSR_LOG_DEBUG("Suppressing ordinary Adj-LSA publication");
-    m_scheduledAdjLsaBuild.cancel();
-    m_isBuildAdjLsaScheduled = false;
-  }
-}
-
-void
-Lsdb::resumeOrdinaryAdjLsaBuildAfterAbort()
-{
-  m_ordinaryAdjLsaPublishSuppressed = false;
-  if (m_confParam.getHyperbolicState() == HYPERBOLIC_STATE_ON) {
-    return;
-  }
-  if (m_adjBuildCount <= 0) {
-    NLSR_LOG_DEBUG("No outstanding Adj-LSA build after abort; nothing to reschedule");
-    return;
-  }
-  if (m_isBuildAdjLsaScheduled) {
-    return;
-  }
-  NLSR_LOG_DEBUG("Resuming ordinary Adj-LSA build in " << m_adjLsaBuildInterval
-                 << " after transition abort");
-  m_isBuildAdjLsaScheduled = true;
-  m_scheduledAdjLsaBuild = m_scheduler.schedule(m_adjLsaBuildInterval, [this] { buildAdjLsa(); });
-}
-
-void
-Lsdb::requestImmediateAdjLsaBuild(std::function<bool()> stillValid)
+Lsdb::requestImmediateAdjLsaBuild()
 {
   if (m_confParam.getHyperbolicState() == HYPERBOLIC_STATE_ON) {
     NLSR_LOG_DEBUG("Adjacency LSA not built while in hyperbolic routing state");
@@ -190,14 +152,9 @@ Lsdb::requestImmediateAdjLsaBuild(std::function<bool()> stillValid)
     return;
   }
 
-  if (stillValid && !stillValid()) {
-    NLSR_LOG_DEBUG("Skipping immediate Adj-LSA build; success completion is no longer valid");
-    return;
-  }
-
   NLSR_LOG_DEBUG("Building Adjacency LSA now instead of in " << m_adjLsaBuildInterval);
   m_scheduledAdjLsaBuild.cancel();
-  buildAdjLsa(/*allowWhileSuppressed=*/true);
+  buildAdjLsa();
 }
 
 void
@@ -364,16 +321,11 @@ Lsdb::removeLsa(const ndn::Name& router, Lsa::Type lsaType)
 }
 
 void
-Lsdb::buildAdjLsa(bool allowWhileSuppressed)
+Lsdb::buildAdjLsa()
 {
   NLSR_LOG_TRACE("buildAdjLsa called");
 
   m_isBuildAdjLsaScheduled = false;
-
-  if (m_ordinaryAdjLsaPublishSuppressed && !allowWhileSuppressed) {
-    NLSR_LOG_DEBUG("Adjacency LSA build suppressed while transition holds publication authority");
-    return;
-  }
 
   if (m_confParam.getAdjacencyList().isAdjLsaBuildable(m_confParam.getInterestRetryNumber())) {
 
@@ -402,7 +354,7 @@ Lsdb::buildAdjLsa(bool allowWhileSuppressed)
   // We are still waiting to know the adjacency status of some
   // neighbor, so schedule a build for later (when all that has
   // hopefully finished)
-  else if (!m_ordinaryAdjLsaPublishSuppressed) {
+  else {
     m_isBuildAdjLsaScheduled = true;
     auto schedulingTime = ndn::time::seconds(m_confParam.getInterestRetryNumber() *
                                              m_confParam.getInterestResendTime());

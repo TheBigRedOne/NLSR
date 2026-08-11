@@ -26,8 +26,6 @@
 
 #include <ndn-cxx/encoding/nfd-constants.hpp>
 
-#include <vector>
-
 namespace nlsr {
 
 INIT_LOGGER(HelloProtocol);
@@ -76,25 +74,27 @@ HelloProtocol::makeHelloInterestName(const ndn::Name& neighbour) const
 }
 
 void
-HelloProtocol::expressInterest(const ndn::Name& interestName, uint32_t seconds, uint64_t flowId)
+HelloProtocol::expressInterest(const ndn::Name& interestName, uint32_t seconds,
+                               bool isReciprocal)
 {
-  NLSR_LOG_DEBUG("Expressing Interest: " << interestName << " (flow " << flowId << ")");
+  NLSR_LOG_DEBUG("Expressing Interest: " << interestName
+                 << (isReciprocal ? " (reciprocal)" : ""));
   ndn::Interest interest(interestName);
   interest.setInterestLifetime(ndn::time::seconds(seconds));
   interest.setMustBeFresh(true);
   interest.setCanBePrefix(true);
   m_face.expressInterest(interest,
-    [this, flowId] (const auto& interest, const auto& data) {
-      onContent(interest, data, flowId);
+    [this, isReciprocal] (const auto& interest, const auto& data) {
+      onContent(interest, data, isReciprocal);
     },
-    [this, seconds, flowId] (const auto& interest, const auto& nack) {
+    [this, seconds, isReciprocal] (const auto& interest, const auto& nack) {
       NDN_LOG_TRACE("Received Nack with reason: " << nack.getReason());
       NDN_LOG_TRACE("Will treat as timeout in " << 2 * seconds << " seconds");
       m_scheduler.schedule(ndn::time::seconds(2 * seconds),
-        [this, interest, flowId] { processInterestTimedOut(interest, flowId); });
+        [this, interest, isReciprocal] { processInterestTimedOut(interest, isReciprocal); });
     },
-    [this, flowId] (const auto& interest) {
-      processInterestTimedOut(interest, flowId);
+    [this, isReciprocal] (const auto& interest) {
+      processInterestTimedOut(interest, isReciprocal);
     });
 
   // increment SENT_HELLO_INTEREST
@@ -112,113 +112,13 @@ HelloProtocol::sendHelloInterest(const ndn::Name& neighbor)
   // If this adjacency has a Face, just proceed as usual.
   if(adjacent->getFaceId() != 0) {
     auto interestName = makeHelloInterestName(adjacent->getName());
-    expressInterest(interestName, m_confParam.getInterestResendTime(), ++m_lastFlowId);
+    // Periodic Hello: not reciprocal; must not request immediate Adj-LSA build.
+    expressInterest(interestName, m_confParam.getInterestResendTime(), false);
     NLSR_LOG_DEBUG("Sending HELLO interest: " << interestName);
   }
 
   m_scheduler.schedule(ndn::time::seconds(m_confParam.getInfoInterestInterval()),
                        [this, neighbor] { sendHelloInterest(neighbor); });
-}
-
-void
-HelloProtocol::expressHelloOnce(const ndn::Name& neighbour, uint64_t generation)
-{
-  auto adjacent = m_adjacencyList.findAdjacent(neighbour);
-  if (adjacent == m_adjacencyList.end() || adjacent->getFaceId() == 0) {
-    return;
-  }
-
-  uint64_t flowId = ++m_lastFlowId;
-  if (generation != 0) {
-    m_authoritativeFlows[neighbour] = VerificationFlow{flowId, generation};
-    // Entering accelerated authority starts a clean retry budget for this verification.
-    m_adjacencyList.setTimedOutInterestCount(neighbour, 0);
-    NLSR_LOG_DEBUG("Flow " << flowId << " verifies " << neighbour
-                   << " for generation=" << generation);
-  }
-
-  expressInterest(makeHelloInterestName(neighbour), m_confParam.getInterestResendTime(), flowId);
-}
-
-bool
-HelloProtocol::canMutateAdjacency(const ndn::Name& neighbour, uint64_t flowId) const
-{
-  auto authIt = m_authoritativeFlows.find(neighbour);
-  if (authIt != m_authoritativeFlows.end()) {
-    return authIt->second.flowId == flowId;
-  }
-
-  auto retireIt = m_retireWatermark.find(neighbour);
-  if (retireIt != m_retireWatermark.end() && flowId <= retireIt->second) {
-    return false;
-  }
-
-  return true;
-}
-
-void
-HelloProtocol::endAuthoritativeOwnership(const ndn::Name& neighbour, uint64_t flowId)
-{
-  auto it = m_authoritativeFlows.find(neighbour);
-  if (it == m_authoritativeFlows.end() || it->second.flowId != flowId) {
-    return;
-  }
-
-  m_authoritativeFlows.erase(it);
-  // Cover the whole overlap window, including vanilla flows issued during authority
-  // with flowIds greater than the authoritative flowId.
-  m_retireWatermark[neighbour] = m_lastFlowId;
-  NLSR_LOG_DEBUG("Retired Hello flows for " << neighbour
-                 << " through flow " << m_lastFlowId);
-}
-
-void
-HelloProtocol::reportVerificationResult(const ndn::Name& neighbour, uint64_t flowId,
-                                        bool isReachable)
-{
-  auto it = m_authoritativeFlows.find(neighbour);
-  if (it == m_authoritativeFlows.end() || it->second.flowId != flowId) {
-    return;
-  }
-
-  uint64_t generation = it->second.generation;
-  endAuthoritativeOwnership(neighbour, flowId);
-
-  NLSR_LOG_DEBUG("Flow " << flowId << " found " << neighbour << " "
-                 << (isReachable ? "reachable" : "unreachable")
-                 << " for generation=" << generation);
-
-  if (m_transitionController != nullptr) {
-    m_transitionController->recordResult(generation, neighbour, isReachable);
-  }
-}
-
-void
-HelloProtocol::abortAcceleratedTransition(uint64_t generation)
-{
-  std::vector<ndn::Name> toRevoke;
-  for (const auto& [neighbour, flow] : m_authoritativeFlows) {
-    if (flow.generation == generation) {
-      toRevoke.push_back(neighbour);
-    }
-  }
-
-  for (const auto& neighbour : toRevoke) {
-    auto it = m_authoritativeFlows.find(neighbour);
-    if (it == m_authoritativeFlows.end()) {
-      continue;
-    }
-    NLSR_LOG_DEBUG("Revoking authoritative flow " << it->second.flowId
-                   << " for " << neighbour << " on abort of generation=" << generation);
-    m_authoritativeFlows.erase(it);
-    m_retireWatermark[neighbour] = m_lastFlowId;
-    // Indeterminate / abort handback: return a clean counter to vanilla Hello.
-    m_adjacencyList.setTimedOutInterestCount(neighbour, 0);
-  }
-
-  if (m_transitionController != nullptr) {
-    m_transitionController->abort(generation);
-  }
 }
 
 void
@@ -258,30 +158,22 @@ HelloProtocol::processInterest(const ndn::Name& name,
     hpIncrementSignal(Statistics::PacketType::SENT_HELLO_DATA);
 
     auto adjacent = m_adjacencyList.findAdjacent(neighbor);
-    // If this neighbor was previously inactive, send our own hello interest, too.
-    // We can only do that if the neighbor currently has a face.
-    if (adjacent->getStatus() == Adjacent::STATUS_INACTIVE && adjacent->getFaceId() != 0) {
-      // The Interest arrived in a configured neighbour's namespace, but only the Hello
-      // Data this router fetches itself is validated. It is therefore a reachability
-      // hint: it says a verification is worth running now, not that the neighbour is
-      // reachable. The probe that would be sent here anyway carries out that
-      // verification, so opening a transition adds no second Hello flow.
-      uint64_t generation = 0;
-      if (m_transitionController != nullptr &&
-          m_confParam.getEventDrivenAdjacencyVerification()) {
-        const bool holdPublicationAuthority = m_confParam.getResultDrivenAdjLsaBuild();
-        generation = m_transitionController->beginTransition(neighbor, holdPublicationAuthority);
-        if (m_transitionController->holdsPublicationAuthority()) {
-          m_lsdb.setOrdinaryAdjLsaPublishSuppressed(true);
-        }
+    // If this neighbor was previously inactive, send our own hello interest, too
+    if (adjacent->getStatus() == Adjacent::STATUS_INACTIVE) {
+      // We can only do that if the neighbor currently has a face.
+      if (adjacent->getFaceId() != 0) {
+        // Incoming Hello is only a reachability hint; this reciprocal Interest
+        // performs the ordinary verification. Mark the flow so a validated
+        // success may skip adj-lsa-build-interval when result-driven build is on.
+        expressInterest(makeHelloInterestName(neighbor),
+                        m_confParam.getInterestResendTime(), true);
       }
-      expressHelloOnce(neighbor, generation);
     }
   }
 }
 
 void
-HelloProtocol::processInterestTimedOut(const ndn::Interest& interest, uint64_t flowId)
+HelloProtocol::processInterestTimedOut(const ndn::Interest& interest, bool isReciprocal)
 {
   // interest name: /<neighbor>/NLSR/INFO/<router>
   const ndn::Name interestName(interest.getName());
@@ -291,13 +183,6 @@ HelloProtocol::processInterestTimedOut(const ndn::Interest& interest, uint64_t f
   }
   ndn::Name neighbor = interestName.getPrefix(-3);
   NLSR_LOG_DEBUG("Neighbor: " << neighbor);
-
-  if (!canMutateAdjacency(neighbor, flowId)) {
-    NLSR_LOG_DEBUG("Flow " << flowId << " is stale for " << neighbor
-                   << "; its timeout neither counts nor retries");
-    return;
-  }
-
   m_adjacencyList.incrementTimedOutInterestCount(neighbor);
 
   Adjacent::Status status = m_adjacencyList.getStatusOfNeighbor(neighbor);
@@ -306,15 +191,12 @@ HelloProtocol::processInterestTimedOut(const ndn::Interest& interest, uint64_t f
   NLSR_LOG_DEBUG("Status: " << status);
   NLSR_LOG_DEBUG("Info Interest Timed out: " << infoIntTimedOutCount);
   if (infoIntTimedOutCount < m_confParam.getInterestRetryNumber()) {
-    // The retry asks the same question about the same adjacency, so it continues the
-    // same flow.
+    // The retry continues the same physical Hello flow, so it keeps isReciprocal.
     auto retryName = makeHelloInterestName(neighbor);
     NLSR_LOG_DEBUG("Resending interest: " << retryName);
-    expressInterest(retryName, m_confParam.getInterestResendTime(), flowId);
-    return;
+    expressInterest(retryName, m_confParam.getInterestResendTime(), isReciprocal);
   }
-
-  if (status == Adjacent::STATUS_ACTIVE) {
+  else if (status == Adjacent::STATUS_ACTIVE) {
     m_adjacencyList.setStatusOfNeighbor(neighbor, Adjacent::STATUS_INACTIVE);
 
     NLSR_LOG_DEBUG("Neighbor: " << neighbor << " status changed to INACTIVE");
@@ -326,17 +208,14 @@ HelloProtocol::processInterestTimedOut(const ndn::Interest& interest, uint64_t f
       m_lsdb.scheduleAdjLsaBuild();
     }
   }
-
-  // The retries are exhausted, so the adjacency is decided whether or not its status
-  // changed here.
-  reportVerificationResult(neighbor, flowId, false);
 }
 
 // This is the first function that incoming Hello data will
 // see. This checks if the data appears to be signed, and passes it
 // on to validate the content of the data.
 void
-HelloProtocol::onContent(const ndn::Interest& interest, const ndn::Data& data, uint64_t flowId)
+HelloProtocol::onContent(const ndn::Interest& interest, const ndn::Data& data,
+                         bool isReciprocal)
 {
   NLSR_LOG_DEBUG("Received data for INFO(name): " << data.getName());
   auto kl = data.getKeyLocator();
@@ -344,16 +223,16 @@ HelloProtocol::onContent(const ndn::Interest& interest, const ndn::Data& data, u
     NLSR_LOG_DEBUG("Data signed with: " << kl->getName());
   }
   m_confParam.getValidator().validate(data,
-                                      [this, flowId] (const auto& validatedData) {
-                                        onContentValidated(validatedData, flowId);
+                                      [this, isReciprocal] (const auto& validatedData) {
+                                        onContentValidated(validatedData, isReciprocal);
                                       },
-                                      [this, flowId] (const auto& rejectedData, const auto& ve) {
-                                        onContentValidationFailed(rejectedData, ve, flowId);
+                                      [this] (const auto& rejectedData, const auto& ve) {
+                                        onContentValidationFailed(rejectedData, ve);
                                       });
 }
 
 void
-HelloProtocol::onContentValidated(const ndn::Data& data, uint64_t flowId)
+HelloProtocol::onContentValidated(const ndn::Data& data, bool isReciprocal)
 {
   // data name: /<neighbor>/NLSR/INFO/<router>/<version>
   ndn::Name dataName = data.getName();
@@ -362,32 +241,35 @@ HelloProtocol::onContentValidated(const ndn::Data& data, uint64_t flowId)
   if (dataName.get(-3).toUri() == INFO_COMPONENT) {
     ndn::Name neighbor = dataName.getPrefix(-4);
 
-    if (!canMutateAdjacency(neighbor, flowId)) {
-      NLSR_LOG_DEBUG("Flow " << flowId << " is stale for " << neighbor
-                     << "; leaving its status to a live flow");
-    }
-    else {
-      Adjacent::Status oldStatus = m_adjacencyList.getStatusOfNeighbor(neighbor);
-      m_adjacencyList.setStatusOfNeighbor(neighbor, Adjacent::STATUS_ACTIVE);
-      m_adjacencyList.setTimedOutInterestCount(neighbor, 0);
-      Adjacent::Status newStatus = m_adjacencyList.getStatusOfNeighbor(neighbor);
+    Adjacent::Status oldStatus = m_adjacencyList.getStatusOfNeighbor(neighbor);
+    m_adjacencyList.setStatusOfNeighbor(neighbor, Adjacent::STATUS_ACTIVE);
+    m_adjacencyList.setTimedOutInterestCount(neighbor, 0);
+    Adjacent::Status newStatus = m_adjacencyList.getStatusOfNeighbor(neighbor);
 
-      NLSR_LOG_DEBUG("Neighbor: " << neighbor);
-      NLSR_LOG_DEBUG("Old Status: " << oldStatus << ", New Status: " << newStatus);
-      // change in Adjacency list
-      if ((oldStatus - newStatus) != 0) {
-        if (m_confParam.getHyperbolicState() == HYPERBOLIC_STATE_ON) {
-          m_routingTable.scheduleRoutingTableCalculation();
-        }
-        else {
-          m_lsdb.scheduleAdjLsaBuild();
-        }
-        onInitialHelloDataValidated(neighbor);
+    NLSR_LOG_DEBUG("Neighbor: " << neighbor);
+    NLSR_LOG_DEBUG("Old Status: " << oldStatus << ", New Status: " << newStatus);
+    // change in Adjacency list
+    if ((oldStatus - newStatus) != 0) {
+      if (m_confParam.getHyperbolicState() == HYPERBOLIC_STATE_ON) {
+        m_routingTable.scheduleRoutingTableCalculation();
       }
+      else {
+        m_lsdb.scheduleAdjLsaBuild();
+      }
+      onInitialHelloDataValidated(neighbor);
+    }
 
-      // Validated Hello Data settles the adjacency whether or not the status changed, so
-      // a verification that confirms an already ACTIVE neighbour completes here as well.
-      reportVerificationResult(neighbor, flowId, true);
+    // Only an incoming-Hello-triggered reciprocal success may replace the fixed
+    // adj-lsa-build-interval wait. Periodic Hello successes never take this path.
+    // Call after the vanilla status update so a concurrent periodic Hello that
+    // already dirtied the Adj-LSA can still be upgraded to an immediate build when
+    // the reciprocal Data arrives with no further status delta.
+    if (isReciprocal &&
+        m_confParam.getResultDrivenAdjLsaBuild() &&
+        m_confParam.getHyperbolicState() != HYPERBOLIC_STATE_ON) {
+      NLSR_LOG_DEBUG("Reciprocal Hello validated for " << neighbor
+                     << "; requesting immediate Adjacency LSA build if dirty");
+      m_lsdb.requestImmediateAdjLsaBuild();
     }
   }
   // increment RCV_HELLO_DATA
@@ -396,33 +278,9 @@ HelloProtocol::onContentValidated(const ndn::Data& data, uint64_t flowId)
 
 void
 HelloProtocol::onContentValidationFailed(const ndn::Data& data,
-                                         const ndn::security::ValidationError& ve,
-                                         uint64_t flowId)
+                                         const ndn::security::ValidationError& ve)
 {
   NLSR_LOG_DEBUG("Validation error: " << ve);
-
-  // data name: /<neighbor>/NLSR/INFO/<router>/<version>
-  const ndn::Name& dataName = data.getName();
-  if (dataName.size() < 4 || dataName.get(-3).toUri() != INFO_COMPONENT) {
-    return;
-  }
-
-  ndn::Name neighbor = dataName.getPrefix(-4);
-  auto it = m_authoritativeFlows.find(neighbor);
-  if (it == m_authoritativeFlows.end()) {
-    // Vanilla Hello: validation failure leaves adjacency untouched and does not abort.
-    return;
-  }
-  if (it->second.flowId != flowId) {
-    NLSR_LOG_DEBUG("Ignoring validation failure from stale flow " << flowId
-                   << " for " << neighbor);
-    return;
-  }
-
-  // Indeterminate: do not recordResult as unreachable; abort the whole generation.
-  NLSR_LOG_DEBUG("Authoritative validation failure for " << neighbor
-                 << "; aborting generation=" << it->second.generation);
-  abortAcceleratedTransition(it->second.generation);
 }
 
 } // namespace nlsr

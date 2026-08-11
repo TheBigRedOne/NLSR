@@ -470,15 +470,9 @@ ConfFileProcessor::processConfSectionNeighbors(const ConfigSection& section)
     return false;
   }
 
-  // event-driven-adjacency-verification
-  bool isEventDrivenVerificationEnabled = false;
-  if (!parseSwitch(section, "event-driven-adjacency-verification",
-                   isEventDrivenVerificationEnabled)) {
-    return false;
-  }
-  m_confParam.setEventDrivenAdjacencyVerification(isEventDrivenVerificationEnabled);
-
-  // result-driven-adj-lsa-build
+  // result-driven-adj-lsa-build: immediate own Adj-LSA after a validated reciprocal
+  // Hello status change (incoming Hello on INACTIVE neighbour), instead of waiting for
+  // adj-lsa-build-interval. Periodic Hello successes keep the ordinary delay.
   bool isResultDrivenBuildEnabled = false;
   if (!parseSwitch(section, "result-driven-adj-lsa-build", isResultDrivenBuildEnabled)) {
     return false;

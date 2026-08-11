@@ -29,7 +29,6 @@
 #include "name-prefix-list.hpp"
 #include "test-access-control.hpp"
 #include "topology-change-observer.hpp"
-#include "transition-controller.hpp"
 #include "publisher/dataset-interest-handler.hpp"
 #include "route/fib.hpp"
 #include "route/name-prefix-table.hpp"
@@ -185,8 +184,6 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   Lsdb m_lsdb;
   RoutingTable m_routingTable;
   NamePrefixTable m_namePrefixTable;
-  /// Declared before m_helloProtocol, which is given a pointer to it.
-  TransitionController m_transitionController;
   HelloProtocol m_helloProtocol;
 
 private:
@@ -216,8 +213,6 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
 private:
   ndn::signal::ScopedConnection m_onOriginReachable;
   ndn::signal::ScopedConnection m_onOriginSettled;
-  ndn::signal::ScopedConnection m_onTransitionResolved;
-  ndn::signal::ScopedConnection m_onTransitionAborted;
   ndn::nfd::FaceMonitor m_faceMonitor;
 };
 

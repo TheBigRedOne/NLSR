@@ -415,31 +415,14 @@ public:
     return m_confFileNameDynamic;
   }
 
-  /*! \brief Enables verifying an adjacency as soon as something suggests it changed,
-   *         instead of only on the periodic Hello round.
+  /*! \brief Enables publishing this router's own Adjacency LSA immediately after a
+   *         validated reciprocal Hello success that changed adjacency status, instead of
+   *         waiting for adj-lsa-build-interval.
    *
-   *  While such a verification is outstanding, it alone decides the adjacency's status:
-   *  the retry count and the ACTIVE/INACTIVE decision are per adjacency, so a Hello flow
-   *  expressed earlier would otherwise decide on its behalf. Off leaves every Hello flow
-   *  with the unmodified behaviour.
-   */
-  void
-  setEventDrivenAdjacencyVerification(bool isEnabled)
-  {
-    m_isEventDrivenAdjacencyVerificationEnabled = isEnabled;
-  }
-
-  bool
-  getEventDrivenAdjacencyVerification() const
-  {
-    return m_isEventDrivenAdjacencyVerificationEnabled;
-  }
-
-  /*! \brief Enables publishing the Adjacency LSA once the adjacency changes of one
-   *         topology change are resolved, in place of the adj-lsa-build-interval delay.
-   *
-   *  Has no effect without event-driven adjacency verification, which is what determines
-   *  that the changes are resolved.
+   *  Reciprocal Hello means the verification that follows an incoming Hello Interest on a
+   *  configured INACTIVE neighbour. Ordinary periodic Hello successes keep the delayed
+   *  build even when this switch is on. Off is equivalent to vanilla reciprocal Hello
+   *  plus the ordinary adj-lsa-build-interval.
    */
   void
   setResultDrivenAdjLsaBuild(bool isEnabled)
@@ -544,7 +527,6 @@ private:
   uint32_t m_adjLsaBuildInterval;
   uint32_t m_routingCalcInterval;
 
-  bool m_isEventDrivenAdjacencyVerificationEnabled = false;
   bool m_isResultDrivenAdjLsaBuildEnabled = false;
 
   uint32_t m_faceDatasetFetchTries;
