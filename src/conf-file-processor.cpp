@@ -479,6 +479,15 @@ ConfFileProcessor::processConfSectionNeighbors(const ConfigSection& section)
   }
   m_confParam.setResultDrivenAdjLsaBuild(isResultDrivenBuildEnabled);
 
+  // event-driven-adjacency-verification: mobility-hint fresh Hello verification
+  // sweep with settled ordinary Adj-LSA publication. Off keeps post-P1 baseline.
+  bool isEventDrivenVerificationEnabled = false;
+  if (!parseSwitch(section, "event-driven-adjacency-verification",
+                   isEventDrivenVerificationEnabled)) {
+    return false;
+  }
+  m_confParam.setEventDrivenAdjacencyVerification(isEventDrivenVerificationEnabled);
+
   // Set the retry count for fetching the FaceStatus dataset
   ConfigurationVariable<uint32_t> faceDatasetFetchTries("face-dataset-fetch-tries",
                                                         std::bind(&ConfParameter::setFaceDatasetFetchTries,

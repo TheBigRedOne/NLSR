@@ -26,6 +26,8 @@
 
 #include <ndn-cxx/encoding/nfd-constants.hpp>
 
+#include <sstream>
+
 namespace nlsr {
 
 INIT_LOGGER(HelloProtocol);
@@ -60,12 +62,24 @@ HelloProtocol::HelloProtocol(ndn::Face& face, ndn::KeyChain& keyChain,
       NDN_THROW(std::runtime_error("Failed to register hello prefix: " + resp));
     },
     m_signingInfo, ndn::nfd::ROUTE_FLAG_CAPTURE);
+
+  // Always register; handler is a no-op when event-driven verification is off.
+  m_face.setInterestFilter(ndn::InterestFilter(VERIFY_NOW_PREFIX).allowLoopback(true),
+    [this] (const auto&, const auto&) {
+      onAttachmentChangeHint();
+    },
+    [] (const auto& name) {
+      NLSR_LOG_DEBUG("Successfully registered prefix: " << name);
+    },
+    [] (const auto& name, const auto& resp) {
+      NLSR_LOG_ERROR("Failed to register prefix " << name << ": " << resp);
+    },
+    m_signingInfo, ndn::nfd::ROUTE_FLAG_CAPTURE);
 }
 
 ndn::Name
 HelloProtocol::makeHelloInterestName(const ndn::Name& neighbour) const
 {
-  // interest name: /<neighbor>/NLSR/INFO/<router>
   ndn::Name interestName(neighbour);
   interestName.append(NLSR_COMPONENT);
   interestName.append(INFO_COMPONENT);
@@ -73,9 +87,40 @@ HelloProtocol::makeHelloInterestName(const ndn::Name& neighbour) const
   return interestName;
 }
 
+ndn::Name
+HelloProtocol::neighborFromHelloInterest(const ndn::Interest& interest) const
+{
+  return interest.getName().getPrefix(-3);
+}
+
+HelloProtocol::AdjHelloControl&
+HelloProtocol::getAdjControl(const ndn::Name& neighbor)
+{
+  return m_adjHello[neighbor];
+}
+
 void
 HelloProtocol::expressInterest(const ndn::Name& interestName, uint32_t seconds,
                                bool isReciprocal)
+{
+  if (!isEventDrivenOn()) {
+    expressInterestVanilla(interestName, seconds, isReciprocal);
+    return;
+  }
+
+  // Owned path requires neighbour identity; Interest name is /<neighbor>/NLSR/INFO/<router>
+  if (interestName.size() < 3) {
+    expressInterestVanilla(interestName, seconds, isReciprocal);
+    return;
+  }
+  ndn::Name neighbor = interestName.getPrefix(-3);
+  auto& ctrl = getAdjControl(neighbor);
+  expressInterestOwned(neighbor, interestName, seconds, isReciprocal, ctrl.flowToken);
+}
+
+void
+HelloProtocol::expressInterestVanilla(const ndn::Name& interestName, uint32_t seconds,
+                                      bool isReciprocal)
 {
   NLSR_LOG_DEBUG("Expressing Interest: " << interestName
                  << (isReciprocal ? " (reciprocal)" : ""));
@@ -85,35 +130,93 @@ HelloProtocol::expressInterest(const ndn::Name& interestName, uint32_t seconds,
   interest.setCanBePrefix(true);
   m_face.expressInterest(interest,
     [this, isReciprocal] (const auto& interest, const auto& data) {
-      onContent(interest, data, isReciprocal);
+      onContent(interest, data, isReciprocal, 0);
     },
     [this, seconds, isReciprocal] (const auto& interest, const auto& nack) {
       NDN_LOG_TRACE("Received Nack with reason: " << nack.getReason());
       NDN_LOG_TRACE("Will treat as timeout in " << 2 * seconds << " seconds");
       m_scheduler.schedule(ndn::time::seconds(2 * seconds),
-        [this, interest, isReciprocal] { processInterestTimedOut(interest, isReciprocal); });
+        [this, interest, isReciprocal] { processInterestTimedOut(interest, isReciprocal, 0); });
     },
     [this, isReciprocal] (const auto& interest) {
-      processInterestTimedOut(interest, isReciprocal);
+      processInterestTimedOut(interest, isReciprocal, 0);
     });
 
-  // increment SENT_HELLO_INTEREST
   hpIncrementSignal(Statistics::PacketType::SENT_HELLO_INTEREST);
 }
 
 void
+HelloProtocol::expressInterestOwned(const ndn::Name& neighbor, const ndn::Name& interestName,
+                                    uint32_t seconds, bool isReciprocal, uint64_t flowToken)
+{
+  NLSR_LOG_DEBUG("Expressing Interest: " << interestName
+                 << (isReciprocal ? " (reciprocal)" : "")
+                 << " token=" << flowToken);
+  ndn::Interest interest(interestName);
+  interest.setInterestLifetime(ndn::time::seconds(seconds));
+  interest.setMustBeFresh(true);
+  interest.setCanBePrefix(true);
+
+  auto& ctrl = getAdjControl(neighbor);
+  ctrl.nackDelayEvent.cancel();
+  ctrl.pendingInterest = m_face.expressInterest(interest,
+    [this, isReciprocal, flowToken] (const auto& interest, const auto& data) {
+      onContent(interest, data, isReciprocal, flowToken);
+    },
+    [this, seconds, isReciprocal, flowToken, neighbor] (const auto& interest, const auto&) {
+      onNackOwned(neighbor, interest, seconds, isReciprocal, flowToken);
+    },
+    [this, isReciprocal, flowToken] (const auto& interest) {
+      processInterestTimedOut(interest, isReciprocal, flowToken);
+    });
+
+  hpIncrementSignal(Statistics::PacketType::SENT_HELLO_INTEREST);
+}
+
+void
+HelloProtocol::onNackOwned(const ndn::Name& neighbor, const ndn::Interest& interest,
+                           uint32_t seconds, bool isReciprocal, uint64_t flowToken)
+{
+  auto& ctrl = getAdjControl(neighbor);
+  // PendingInterestHandle::cancel is asynchronous; a superseded flow's NACK may
+  // still arrive. Refuse to touch nackDelayEvent unless this token is current.
+  if (flowToken != ctrl.flowToken) {
+    NLSR_LOG_DEBUG("STALE HELLO CALLBACK: neighbor=" << neighbor
+                   << " token=" << flowToken
+                   << " current=" << ctrl.flowToken
+                   << " reason=nack");
+    return;
+  }
+
+  NDN_LOG_TRACE("Received Nack for " << interest.getName());
+  NDN_LOG_TRACE("Will treat as timeout in " << 2 * seconds << " seconds");
+  ctrl.nackDelayEvent = m_scheduler.schedule(ndn::time::seconds(2 * seconds),
+    [this, interest, isReciprocal, flowToken] {
+      processInterestTimedOut(interest, isReciprocal, flowToken);
+    });
+}
+
+void
 HelloProtocol::sendHelloInterest(const ndn::Name& neighbor)
+{
+  if (!isEventDrivenOn()) {
+    sendHelloInterestVanilla(neighbor);
+    return;
+  }
+  sendHelloInterestOwned(neighbor);
+}
+
+void
+HelloProtocol::sendHelloInterestVanilla(const ndn::Name& neighbor)
 {
   auto adjacent = m_adjacencyList.findAdjacent(neighbor);
   if (adjacent == m_adjacencyList.end()) {
     return;
   }
 
-  // If this adjacency has a Face, just proceed as usual.
-  if(adjacent->getFaceId() != 0) {
+  if (adjacent->getFaceId() != 0) {
     auto interestName = makeHelloInterestName(adjacent->getName());
-    // Periodic Hello: not reciprocal; must not request immediate Adj-LSA build.
-    expressInterest(interestName, m_confParam.getInterestResendTime(), false);
+    expressInterestVanilla(interestName, m_confParam.getInterestResendTime(), false);
     NLSR_LOG_DEBUG("Sending HELLO interest: " << interestName);
   }
 
@@ -122,13 +225,87 @@ HelloProtocol::sendHelloInterest(const ndn::Name& neighbor)
 }
 
 void
+HelloProtocol::sendHelloInterestOwned(const ndn::Name& neighbor)
+{
+  auto adjacent = m_adjacencyList.findAdjacent(neighbor);
+  if (adjacent == m_adjacencyList.end()) {
+    return;
+  }
+
+  auto& ctrl = getAdjControl(neighbor);
+  // Periodic tick reuses the current flowToken for a new Interest only when no
+  // mobility sweep owns a fresh supersede; bump token so this becomes the sole
+  // authoritative flow for the adjacency.
+  const uint64_t oldToken = ctrl.flowToken;
+  ++ctrl.flowToken;
+  ctrl.nackDelayEvent.cancel();
+  ctrl.pendingInterest.cancel();
+  NLSR_LOG_DEBUG("HELLO FLOW SUPERSEDE: neighbor=" << neighbor
+                 << " oldToken=" << oldToken << " newToken=" << ctrl.flowToken
+                 << " reason=periodic");
+
+  if (adjacent->getFaceId() != 0) {
+    auto interestName = makeHelloInterestName(adjacent->getName());
+    expressInterestOwned(neighbor, interestName, m_confParam.getInterestResendTime(),
+                         false, ctrl.flowToken);
+    NLSR_LOG_DEBUG("Sending HELLO interest: " << interestName);
+  }
+
+  ctrl.periodicEvent = m_scheduler.schedule(
+    ndn::time::seconds(m_confParam.getInfoInterestInterval()),
+    [this, neighbor] { sendHelloInterest(neighbor); });
+}
+
+void
+HelloProtocol::requestVerificationNow(const ndn::Name& neighbor)
+{
+  auto adjacent = m_adjacencyList.findAdjacent(neighbor);
+  if (adjacent == m_adjacencyList.end()) {
+    noteSweepResult(neighbor, VerifyResult::INDETERMINATE);
+    return;
+  }
+
+  auto& ctrl = getAdjControl(neighbor);
+  const uint64_t oldToken = ctrl.flowToken;
+  ++ctrl.flowToken;
+  ctrl.nackDelayEvent.cancel();
+  ctrl.pendingInterest.cancel();
+  ctrl.periodicEvent.cancel();
+  m_adjacencyList.setTimedOutInterestCount(neighbor, 0);
+
+  NLSR_LOG_INFO("HELLO FLOW SUPERSEDE: neighbor=" << neighbor
+                << " oldToken=" << oldToken << " newToken=" << ctrl.flowToken
+                << " reason=verify-now");
+
+  if (adjacent->getFaceId() == 0) {
+    // No Face to probe. Face-destroy path should already have marked INACTIVE;
+    // treat as decisive UNREACHABLE for the sweep when status is not ACTIVE.
+    if (adjacent->getStatus() != Adjacent::STATUS_ACTIVE) {
+      noteSweepResult(neighbor, VerifyResult::UNREACHABLE);
+    }
+    else {
+      noteSweepResult(neighbor, VerifyResult::INDETERMINATE);
+    }
+    ctrl.periodicEvent = m_scheduler.schedule(
+      ndn::time::seconds(m_confParam.getInfoInterestInterval()),
+      [this, neighbor] { sendHelloInterest(neighbor); });
+    return;
+  }
+
+  auto interestName = makeHelloInterestName(adjacent->getName());
+  expressInterestOwned(neighbor, interestName, m_confParam.getInterestResendTime(),
+                       false, ctrl.flowToken);
+  ctrl.periodicEvent = m_scheduler.schedule(
+    ndn::time::seconds(m_confParam.getInfoInterestInterval()),
+    [this, neighbor] { sendHelloInterest(neighbor); });
+}
+
+void
 HelloProtocol::processInterest(const ndn::Name& name,
                                const ndn::Interest& interest)
 {
-  // interest name: /<neighbor>/NLSR/INFO/<router>
   const ndn::Name interestName = interest.getName();
 
-  // increment RCV_HELLO_INTEREST
   hpIncrementSignal(Statistics::PacketType::RCV_HELLO_INTEREST);
 
   NLSR_LOG_DEBUG("Interest received for Name: " << interestName);
@@ -143,9 +320,6 @@ HelloProtocol::processInterest(const ndn::Name& name,
   if (m_adjacencyList.isNeighbor(neighbor)) {
     auto data = std::make_shared<ndn::Data>();
     data->setName(ndn::Name(interest.getName()).appendVersion());
-    // A Hello reply being cached longer than is needed to fufill an Interest
-    // can cause counterintuitive behavior. Consequently, we use the default
-    // minimum of 0 ms.
     data->setFreshnessPeriod(0_ms);
     data->setContent(ndn::make_span(reinterpret_cast<const uint8_t*>(INFO_COMPONENT.data()),
                                     INFO_COMPONENT.size()));
@@ -154,34 +328,54 @@ HelloProtocol::processInterest(const ndn::Name& name,
 
     NLSR_LOG_DEBUG("Sending out data for name: " << interest.getName());
     m_face.put(*data);
-    // increment SENT_HELLO_DATA
     hpIncrementSignal(Statistics::PacketType::SENT_HELLO_DATA);
 
     auto adjacent = m_adjacencyList.findAdjacent(neighbor);
-    // If this neighbor was previously inactive, send our own hello interest, too
     if (adjacent->getStatus() == Adjacent::STATUS_INACTIVE) {
-      // We can only do that if the neighbor currently has a face.
       if (adjacent->getFaceId() != 0) {
-        // Incoming Hello is only a reachability hint; this reciprocal Interest
-        // performs the ordinary verification. Mark the flow so a validated
-        // success may skip adj-lsa-build-interval when result-driven build is on.
-        expressInterest(makeHelloInterestName(neighbor),
-                        m_confParam.getInterestResendTime(), true);
+        if (!isEventDrivenOn()) {
+          expressInterestVanilla(makeHelloInterestName(neighbor),
+                                 m_confParam.getInterestResendTime(), true);
+        }
+        else {
+          auto& ctrl = getAdjControl(neighbor);
+          const uint64_t oldToken = ctrl.flowToken;
+          ++ctrl.flowToken;
+          ctrl.nackDelayEvent.cancel();
+          ctrl.pendingInterest.cancel();
+          NLSR_LOG_DEBUG("HELLO FLOW SUPERSEDE: neighbor=" << neighbor
+                         << " oldToken=" << oldToken << " newToken=" << ctrl.flowToken
+                         << " reason=reciprocal");
+          expressInterestOwned(neighbor, makeHelloInterestName(neighbor),
+                               m_confParam.getInterestResendTime(), true, ctrl.flowToken);
+        }
       }
     }
   }
 }
 
 void
-HelloProtocol::processInterestTimedOut(const ndn::Interest& interest, bool isReciprocal)
+HelloProtocol::processInterestTimedOut(const ndn::Interest& interest, bool isReciprocal,
+                                       uint64_t flowToken)
 {
-  // interest name: /<neighbor>/NLSR/INFO/<router>
   const ndn::Name interestName(interest.getName());
   NLSR_LOG_DEBUG("Interest timed out for Name: " << interestName);
   if (interestName.get(-2).toUri() != INFO_COMPONENT) {
     return;
   }
   ndn::Name neighbor = interestName.getPrefix(-3);
+
+  if (isEventDrivenOn()) {
+    auto& ctrl = getAdjControl(neighbor);
+    if (flowToken != ctrl.flowToken) {
+      NLSR_LOG_DEBUG("STALE HELLO CALLBACK: neighbor=" << neighbor
+                     << " token=" << flowToken
+                     << " current=" << ctrl.flowToken
+                     << " reason=timeout");
+      return;
+    }
+  }
+
   NLSR_LOG_DEBUG("Neighbor: " << neighbor);
   m_adjacencyList.incrementTimedOutInterestCount(neighbor);
 
@@ -191,31 +385,39 @@ HelloProtocol::processInterestTimedOut(const ndn::Interest& interest, bool isRec
   NLSR_LOG_DEBUG("Status: " << status);
   NLSR_LOG_DEBUG("Info Interest Timed out: " << infoIntTimedOutCount);
   if (infoIntTimedOutCount < m_confParam.getInterestRetryNumber()) {
-    // The retry continues the same physical Hello flow, so it keeps isReciprocal.
     auto retryName = makeHelloInterestName(neighbor);
     NLSR_LOG_DEBUG("Resending interest: " << retryName);
-    expressInterest(retryName, m_confParam.getInterestResendTime(), isReciprocal);
-  }
-  else if (status == Adjacent::STATUS_ACTIVE) {
-    m_adjacencyList.setStatusOfNeighbor(neighbor, Adjacent::STATUS_INACTIVE);
-
-    NLSR_LOG_DEBUG("Neighbor: " << neighbor << " status changed to INACTIVE");
-
-    if (m_confParam.getHyperbolicState() == HYPERBOLIC_STATE_ON) {
-      m_routingTable.scheduleRoutingTableCalculation();
+    if (!isEventDrivenOn()) {
+      expressInterestVanilla(retryName, m_confParam.getInterestResendTime(), isReciprocal);
     }
     else {
-      m_lsdb.scheduleAdjLsaBuild();
+      expressInterestOwned(neighbor, retryName, m_confParam.getInterestResendTime(),
+                           isReciprocal, flowToken);
+    }
+  }
+  else {
+    if (status == Adjacent::STATUS_ACTIVE) {
+      m_adjacencyList.setStatusOfNeighbor(neighbor, Adjacent::STATUS_INACTIVE);
+
+      NLSR_LOG_DEBUG("Neighbor: " << neighbor << " status changed to INACTIVE");
+
+      if (m_confParam.getHyperbolicState() == HYPERBOLIC_STATE_ON) {
+        m_routingTable.scheduleRoutingTableCalculation();
+      }
+      else {
+        m_lsdb.scheduleAdjLsaBuild();
+      }
+    }
+
+    if (isEventDrivenOn()) {
+      noteSweepResult(neighbor, VerifyResult::UNREACHABLE);
     }
   }
 }
 
-// This is the first function that incoming Hello data will
-// see. This checks if the data appears to be signed, and passes it
-// on to validate the content of the data.
 void
 HelloProtocol::onContent(const ndn::Interest& interest, const ndn::Data& data,
-                         bool isReciprocal)
+                         bool isReciprocal, uint64_t flowToken)
 {
   NLSR_LOG_DEBUG("Received data for INFO(name): " << data.getName());
   auto kl = data.getKeyLocator();
@@ -223,54 +425,70 @@ HelloProtocol::onContent(const ndn::Interest& interest, const ndn::Data& data,
     NLSR_LOG_DEBUG("Data signed with: " << kl->getName());
   }
   m_confParam.getValidator().validate(data,
-                                      [this, isReciprocal] (const auto& validatedData) {
-                                        onContentValidated(validatedData, isReciprocal);
+                                      [this, isReciprocal, flowToken] (const auto& validatedData) {
+                                        onContentValidated(validatedData, isReciprocal, flowToken);
                                       },
-                                      [this] (const auto& rejectedData, const auto& ve) {
-                                        onContentValidationFailed(rejectedData, ve);
+                                      [this, flowToken] (const auto& rejectedData, const auto& ve) {
+                                        onContentValidationFailed(rejectedData, ve, flowToken);
                                       });
 }
 
 void
-HelloProtocol::onContentValidated(const ndn::Data& data, bool isReciprocal)
+HelloProtocol::onContentValidated(const ndn::Data& data, bool isReciprocal, uint64_t flowToken)
 {
-  // data name: /<neighbor>/NLSR/INFO/<router>/<version>
   ndn::Name dataName = data.getName();
   NLSR_LOG_DEBUG("Data validation successful for INFO(name): " << dataName);
 
-  if (dataName.get(-3).toUri() == INFO_COMPONENT) {
-    ndn::Name neighbor = dataName.getPrefix(-4);
+  if (dataName.get(-3).toUri() != INFO_COMPONENT) {
+    return;
+  }
 
-    Adjacent::Status oldStatus = m_adjacencyList.getStatusOfNeighbor(neighbor);
-    m_adjacencyList.setStatusOfNeighbor(neighbor, Adjacent::STATUS_ACTIVE);
-    m_adjacencyList.setTimedOutInterestCount(neighbor, 0);
-    Adjacent::Status newStatus = m_adjacencyList.getStatusOfNeighbor(neighbor);
+  ndn::Name neighbor = dataName.getPrefix(-4);
 
-    NLSR_LOG_DEBUG("Neighbor: " << neighbor);
-    NLSR_LOG_DEBUG("Old Status: " << oldStatus << ", New Status: " << newStatus);
-    // change in Adjacency list
-    if ((oldStatus - newStatus) != 0) {
-      if (m_confParam.getHyperbolicState() == HYPERBOLIC_STATE_ON) {
-        m_routingTable.scheduleRoutingTableCalculation();
-      }
-      else {
-        m_lsdb.scheduleAdjLsaBuild();
-      }
-      onInitialHelloDataValidated(neighbor);
+  if (isEventDrivenOn()) {
+    auto& ctrl = getAdjControl(neighbor);
+    if (flowToken != ctrl.flowToken) {
+      NLSR_LOG_DEBUG("STALE HELLO CALLBACK: neighbor=" << neighbor
+                     << " token=" << flowToken
+                     << " current=" << ctrl.flowToken
+                     << " reason=data");
+      return;
     }
+  }
 
-    // Only an incoming-Hello-triggered reciprocal success may replace the fixed
-    // adj-lsa-build-interval wait. Periodic Hello successes never take this path.
-    // Call after the vanilla status update so a concurrent periodic Hello that
-    // already dirtied the Adj-LSA can still be upgraded to an immediate build when
-    // the reciprocal Data arrives with no further status delta.
-    if (isReciprocal &&
-        m_confParam.getResultDrivenAdjLsaBuild() &&
-        m_confParam.getHyperbolicState() != HYPERBOLIC_STATE_ON) {
+  Adjacent::Status oldStatus = m_adjacencyList.getStatusOfNeighbor(neighbor);
+  m_adjacencyList.setStatusOfNeighbor(neighbor, Adjacent::STATUS_ACTIVE);
+  m_adjacencyList.setTimedOutInterestCount(neighbor, 0);
+  Adjacent::Status newStatus = m_adjacencyList.getStatusOfNeighbor(neighbor);
+
+  NLSR_LOG_DEBUG("Neighbor: " << neighbor);
+  NLSR_LOG_DEBUG("Old Status: " << oldStatus << ", New Status: " << newStatus);
+  if ((oldStatus - newStatus) != 0) {
+    if (m_confParam.getHyperbolicState() == HYPERBOLIC_STATE_ON) {
+      m_routingTable.scheduleRoutingTableCalculation();
+    }
+    else {
+      m_lsdb.scheduleAdjLsaBuild();
+    }
+    onInitialHelloDataValidated(neighbor);
+  }
+
+  if (isReciprocal &&
+      m_confParam.getResultDrivenAdjLsaBuild() &&
+      m_confParam.getHyperbolicState() != HYPERBOLIC_STATE_ON) {
+    if (isEventDrivenOn() && m_sweep.has_value()) {
+      NLSR_LOG_DEBUG("Reciprocal Hello validated for " << neighbor
+                     << "; immediate Adj-LSA deferred while mobility sweep is active");
+    }
+    else {
       NLSR_LOG_DEBUG("Reciprocal Hello validated for " << neighbor
                      << "; requesting immediate Adjacency LSA build if dirty");
       m_lsdb.requestImmediateAdjLsaBuild();
     }
+  }
+
+  if (isEventDrivenOn()) {
+    noteSweepResult(neighbor, VerifyResult::REACHABLE);
   }
   // increment RCV_HELLO_DATA
   hpIncrementSignal(Statistics::PacketType::RCV_HELLO_DATA);
@@ -278,9 +496,175 @@ HelloProtocol::onContentValidated(const ndn::Data& data, bool isReciprocal)
 
 void
 HelloProtocol::onContentValidationFailed(const ndn::Data& data,
-                                         const ndn::security::ValidationError& ve)
+                                         const ndn::security::ValidationError& ve,
+                                         uint64_t flowToken)
 {
   NLSR_LOG_DEBUG("Validation error: " << ve);
+  if (!isEventDrivenOn() || data.getName().size() < 4) {
+    return;
+  }
+  if (data.getName().get(-3).toUri() != INFO_COMPONENT) {
+    return;
+  }
+  ndn::Name neighbor = data.getName().getPrefix(-4);
+  auto& ctrl = getAdjControl(neighbor);
+  if (flowToken != ctrl.flowToken) {
+    NLSR_LOG_DEBUG("STALE HELLO CALLBACK: neighbor=" << neighbor
+                   << " token=" << flowToken
+                   << " current=" << ctrl.flowToken
+                   << " reason=validation-failure");
+    return;
+  }
+  noteSweepResult(neighbor, VerifyResult::INDETERMINATE);
+}
+
+void
+HelloProtocol::onAttachmentChangeHint()
+{
+  if (!isEventDrivenOn()) {
+    return;
+  }
+  beginMobilitySweep();
+}
+
+void
+HelloProtocol::onAdjacentFaceDestroyed(const ndn::Name& neighbor)
+{
+  if (!isEventDrivenOn() || !m_sweep.has_value()) {
+    return;
+  }
+  if (m_sweep->targets.count(neighbor) == 0) {
+    return;
+  }
+
+  // End the authoritative Hello flow before recording UNREACHABLE so a late
+  // Data/timeout for the destroyed face cannot revive ACTIVE or overwrite the
+  // sweep result (approved face-destroy + current-token invariants).
+  auto& ctrl = getAdjControl(neighbor);
+  const uint64_t oldToken = ctrl.flowToken;
+  ++ctrl.flowToken;
+  ctrl.nackDelayEvent.cancel();
+  ctrl.pendingInterest.cancel();
+  NLSR_LOG_INFO("HELLO FLOW SUPERSEDE: neighbor=" << neighbor
+                << " oldToken=" << oldToken << " newToken=" << ctrl.flowToken
+                << " reason=face-destroy");
+
+  noteSweepResult(neighbor, VerifyResult::UNREACHABLE);
+}
+
+std::set<ndn::Name>
+HelloProtocol::buildSweepTargets() const
+{
+  std::set<ndn::Name> targets;
+  for (const auto& adj : m_adjacencyList.getAdjList()) {
+    if (adj.getStatus() == Adjacent::STATUS_ACTIVE || adj.getFaceId() != 0) {
+      targets.insert(adj.getName());
+    }
+  }
+  return targets;
+}
+
+void
+HelloProtocol::beginMobilitySweep()
+{
+  if (m_sweep.has_value()) {
+    NLSR_LOG_INFO("MOBILITY VERIFICATION: replacing serial=" << m_sweep->serial);
+    // Publication hold stays active across serial replacement; only release on
+    // settle/abort of the newest sweep.
+  }
+  else {
+    m_lsdb.holdAdjLsaBuild();
+  }
+
+  MobilitySweep sweep;
+  sweep.serial = m_nextSweepSerial++;
+  sweep.targets = buildSweepTargets();
+  m_sweep = std::move(sweep);
+
+  std::ostringstream oss;
+  for (const auto& t : m_sweep->targets) {
+    oss << t << " ";
+  }
+  NLSR_LOG_INFO("MOBILITY VERIFICATION START: serial=" << m_sweep->serial
+                << " targets=[" << oss.str() << "]");
+
+  if (m_sweep->targets.empty()) {
+    abortMobilitySweep("empty-target-set");
+    return;
+  }
+
+  const auto targets = m_sweep->targets;
+  for (const auto& neighbor : targets) {
+    // requestVerificationNow may abort the sweep (INDETERMINATE). Do not continue
+    // issuing verify-now probes after publication authority has returned to ordinary.
+    if (!m_sweep.has_value()) {
+      return;
+    }
+    requestVerificationNow(neighbor);
+  }
+}
+
+void
+HelloProtocol::abortMobilitySweep(const std::string& reason)
+{
+  if (!m_sweep.has_value()) {
+    return;
+  }
+  NLSR_LOG_INFO("MOBILITY VERIFICATION ABORT: serial=" << m_sweep->serial
+                << " reason=" << reason);
+  m_sweep.reset();
+  m_lsdb.releaseAdjLsaBuildHold(false);
+}
+
+void
+HelloProtocol::noteSweepResult(const ndn::Name& neighbor, VerifyResult result)
+{
+  if (!m_sweep.has_value()) {
+    return;
+  }
+  if (m_sweep->targets.count(neighbor) == 0) {
+    return;
+  }
+
+  const char* label = "INDETERMINATE";
+  if (result == VerifyResult::REACHABLE) {
+    label = "REACHABLE";
+  }
+  else if (result == VerifyResult::UNREACHABLE) {
+    label = "UNREACHABLE";
+  }
+
+  auto& ctrl = getAdjControl(neighbor);
+  NLSR_LOG_INFO("HELLO VERIFY RESULT: serial=" << m_sweep->serial
+                << " neighbor=" << neighbor
+                << " token=" << ctrl.flowToken
+                << " result=" << label);
+
+  if (result == VerifyResult::INDETERMINATE) {
+    abortMobilitySweep("indeterminate-result");
+    return;
+  }
+
+  m_sweep->results[neighbor] = result;
+  checkSweepCompletion();
+}
+
+void
+HelloProtocol::checkSweepCompletion()
+{
+  if (!m_sweep.has_value()) {
+    return;
+  }
+
+  for (const auto& target : m_sweep->targets) {
+    if (m_sweep->results.find(target) == m_sweep->results.end()) {
+      return;
+    }
+  }
+
+  NLSR_LOG_INFO("MOBILITY VERIFICATION COMPLETE: serial=" << m_sweep->serial);
+  m_sweep.reset();
+  m_lsdb.releaseAdjLsaBuildHold(true);
 }
 
 } // namespace nlsr

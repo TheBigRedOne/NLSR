@@ -92,6 +92,8 @@ ConfParameter::writeLog()
 
   NLSR_LOG_INFO("Result-driven Adjacency LSA build (reciprocal success only): "
                 << (m_isResultDrivenAdjLsaBuildEnabled ? "on" : "off"));
+  NLSR_LOG_INFO("Event-driven adjacency verification (mobility sweep): "
+                << (m_isEventDrivenAdjacencyVerificationEnabled ? "on" : "off"));
 }
 
 void

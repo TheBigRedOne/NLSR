@@ -97,6 +97,30 @@ public:
   void
   requestImmediateAdjLsaBuild();
 
+  /*! \brief Hold own Adj-LSA builds until releaseAdjLsaBuildHold.
+   *
+   *  Cancels any pending debounce timer but preserves m_adjBuildCount so dirty
+   *  bookkeeping is not lost. scheduleAdjLsaBuild continues to increment the
+   *  dirty count while held without starting a timer.
+   */
+  void
+  holdAdjLsaBuild();
+
+  /*! \brief End an Adj-LSA build hold.
+   *
+   *  When \p immediateIfDirty is true and dirty count is outstanding, performs
+   *  requestImmediateAdjLsaBuild. Otherwise, if dirty count is outstanding,
+   *  restores one ordinary debounce schedule without incrementing the count.
+   */
+  void
+  releaseAdjLsaBuildHold(bool immediateIfDirty);
+
+  bool
+  isAdjLsaBuildHeld() const
+  {
+    return m_adjLsaBuildHeld;
+  }
+
   void
   writeLog() const;
 
@@ -374,6 +398,7 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   ndn::InMemoryStorageFifo m_segmentFifo;
 
   bool m_isBuildAdjLsaScheduled;
+  bool m_adjLsaBuildHeld = false;
   int64_t m_adjBuildCount;
   ndn::scheduler::ScopedEventId m_scheduledAdjLsaBuild;
 

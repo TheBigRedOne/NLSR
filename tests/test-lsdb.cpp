@@ -22,6 +22,7 @@
 #include "lsdb.hpp"
 #include "lsa/lsa.hpp"
 #include "name-prefix-list.hpp"
+#include "adjacent.hpp"
 
 #include "tests/io-key-chain-fixture.hpp"
 #include "tests/test-common.hpp"
@@ -459,6 +460,93 @@ BOOST_AUTO_TEST_CASE(LsdbSignals)
 
   lsdb.removeLsa(lsaPtrCheck->getOriginRouter(), Lsa::Type::COORDINATE);
   checkSignalResult(LsdbUpdate::REMOVED, lsaPtr, {}, {});
+}
+
+BOOST_AUTO_TEST_CASE(AdjLsaBuildHoldPreservesDirty)
+{
+  conf.setAdjLsaBuildInterval(5);
+  lsdb.scheduleAdjLsaBuild();
+  BOOST_CHECK(lsdb.m_isBuildAdjLsaScheduled);
+  BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 1);
+
+  lsdb.holdAdjLsaBuild();
+  BOOST_CHECK(lsdb.isAdjLsaBuildHeld());
+  BOOST_CHECK(!lsdb.m_isBuildAdjLsaScheduled);
+  BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 1);
+
+  lsdb.scheduleAdjLsaBuild();
+  BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 2);
+  BOOST_CHECK(!lsdb.m_isBuildAdjLsaScheduled);
+
+  advanceClocks(6_s);
+  BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 2);
+  BOOST_CHECK(lsdb.isAdjLsaBuildHeld());
+
+  lsdb.requestImmediateAdjLsaBuild();
+  BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 2);
+
+  lsdb.releaseAdjLsaBuildHold(false);
+  BOOST_CHECK(!lsdb.isAdjLsaBuildHeld());
+  BOOST_CHECK(lsdb.m_isBuildAdjLsaScheduled);
+  BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 2);
+}
+
+BOOST_AUTO_TEST_CASE(AdjLsaBuildHoldSettleImmediate)
+{
+  conf.setAdjLsaBuildInterval(5);
+  // Make Adj-LSA buildable: one ACTIVE neighbour.
+  Adjacent adj("/ndn/site/%C1.Router/n1", ndn::FaceUri("udp4://10.0.0.1:6363"),
+               10, Adjacent::STATUS_ACTIVE, 0, 1);
+  conf.getAdjacencyList().insert(adj);
+
+  lsdb.scheduleAdjLsaBuild();
+  lsdb.holdAdjLsaBuild();
+  lsdb.releaseAdjLsaBuildHold(true);
+  BOOST_CHECK(!lsdb.isAdjLsaBuildHeld());
+  BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 0);
+}
+
+BOOST_AUTO_TEST_CASE(AdjLsaBuildHoldBlocksReadyCallback)
+{
+  // Models a timer callback that still enters buildAdjLsa after hold was set
+  // (cancel too late / direct entry). Guard must not publish or consume dirty.
+  conf.setAdjLsaBuildInterval(5);
+  Adjacent adj("/ndn/site/%C1.Router/n1", ndn::FaceUri("udp4://10.0.0.1:6363"),
+               10, Adjacent::STATUS_ACTIVE, 0, 1);
+  conf.getAdjacencyList().insert(adj);
+
+  lsdb.scheduleAdjLsaBuild();
+  lsdb.scheduleAdjLsaBuild();
+  BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 2);
+
+  lsdb.holdAdjLsaBuild();
+  lsdb.buildAdjLsa(); // ready-callback / accidental entry while held
+  BOOST_CHECK(lsdb.isAdjLsaBuildHeld());
+  BOOST_CHECK(!lsdb.m_isBuildAdjLsaScheduled);
+  BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 2);
+
+  lsdb.releaseAdjLsaBuildHold(true);
+  BOOST_CHECK(!lsdb.isAdjLsaBuildHeld());
+  BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 0);
+}
+
+BOOST_AUTO_TEST_CASE(AdjLsaBuildHoldBlocksThenAbortRestoresDebounce)
+{
+  conf.setAdjLsaBuildInterval(5);
+  Adjacent adj("/ndn/site/%C1.Router/n1", ndn::FaceUri("udp4://10.0.0.1:6363"),
+               10, Adjacent::STATUS_ACTIVE, 0, 1);
+  conf.getAdjacencyList().insert(adj);
+
+  lsdb.scheduleAdjLsaBuild();
+  lsdb.holdAdjLsaBuild();
+  lsdb.buildAdjLsa();
+  BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 1);
+  BOOST_CHECK(!lsdb.m_isBuildAdjLsaScheduled);
+
+  lsdb.releaseAdjLsaBuildHold(false);
+  BOOST_CHECK(!lsdb.isAdjLsaBuildHeld());
+  BOOST_CHECK(lsdb.m_isBuildAdjLsaScheduled);
+  BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 1);
 }
 
 BOOST_AUTO_TEST_SUITE_END() // TestLsdb

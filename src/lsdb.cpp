@@ -129,6 +129,12 @@ Lsdb::scheduleAdjLsaBuild()
     return;
   }
 
+  if (m_adjLsaBuildHeld) {
+    NLSR_LOG_DEBUG("ADJ LSA HOLD: dirty count=" << m_adjBuildCount
+                   << " (timer suppressed while mobility sweep holds publication)");
+    return;
+  }
+
   if (m_isBuildAdjLsaScheduled) {
     NLSR_LOG_DEBUG("Rescheduling Adjacency LSA build in " << m_adjLsaBuildInterval);
   }
@@ -147,6 +153,11 @@ Lsdb::requestImmediateAdjLsaBuild()
     return;
   }
 
+  if (m_adjLsaBuildHeld) {
+    NLSR_LOG_DEBUG("ADJ LSA HOLD: immediate build deferred while mobility sweep is active");
+    return;
+  }
+
   if (m_adjBuildCount <= 0) {
     NLSR_LOG_DEBUG("No Adjacency LSA build is outstanding; nothing to build immediately");
     return;
@@ -155,6 +166,44 @@ Lsdb::requestImmediateAdjLsaBuild()
   NLSR_LOG_DEBUG("Building Adjacency LSA now instead of in " << m_adjLsaBuildInterval);
   m_scheduledAdjLsaBuild.cancel();
   buildAdjLsa();
+}
+
+void
+Lsdb::holdAdjLsaBuild()
+{
+  m_adjLsaBuildHeld = true;
+  m_scheduledAdjLsaBuild.cancel();
+  m_isBuildAdjLsaScheduled = false;
+  NLSR_LOG_INFO("ADJ LSA HOLD: begin (dirty count=" << m_adjBuildCount << ")");
+}
+
+void
+Lsdb::releaseAdjLsaBuildHold(bool immediateIfDirty)
+{
+  if (!m_adjLsaBuildHeld) {
+    return;
+  }
+  m_adjLsaBuildHeld = false;
+
+  if (m_adjBuildCount <= 0) {
+    NLSR_LOG_INFO("ADJ LSA HOLD " << (immediateIfDirty ? "SETTLE" : "ABORT")
+                  << ": dirty count=0 (no publication)");
+    return;
+  }
+
+  if (immediateIfDirty) {
+    NLSR_LOG_INFO("ADJ LSA HOLD SETTLE: dirty count=" << m_adjBuildCount);
+    requestImmediateAdjLsaBuild();
+    return;
+  }
+
+  NLSR_LOG_INFO("ADJ LSA HOLD ABORT: restoring ordinary debounce (dirty count="
+                << m_adjBuildCount << ")");
+  if (m_confParam.getHyperbolicState() == HYPERBOLIC_STATE_ON) {
+    return;
+  }
+  m_isBuildAdjLsaScheduled = true;
+  m_scheduledAdjLsaBuild = m_scheduler.schedule(m_adjLsaBuildInterval, [this] { buildAdjLsa(); });
 }
 
 void
@@ -325,7 +374,16 @@ Lsdb::buildAdjLsa()
 {
   NLSR_LOG_TRACE("buildAdjLsa called");
 
+  // This callback (or any direct caller) has consumed the scheduled event slot.
   m_isBuildAdjLsaScheduled = false;
+
+  // Final publication gate: hold must block every entry path, including a timer
+  // callback that was already dequeued before cancel could take effect.
+  if (m_adjLsaBuildHeld) {
+    NLSR_LOG_DEBUG("ADJ LSA HOLD: buildAdjLsa suppressed (dirty count="
+                   << m_adjBuildCount << ")");
+    return;
+  }
 
   if (m_confParam.getAdjacencyList().isAdjLsaBuildable(m_confParam.getInterestRetryNumber())) {
 

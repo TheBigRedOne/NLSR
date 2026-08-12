@@ -436,6 +436,27 @@ public:
     return m_isResultDrivenAdjLsaBuildEnabled;
   }
 
+  /*! \brief Enables mobility-hint event-driven Hello verification and settled
+   *         ordinary Adj-LSA publication (Commit2).
+   *
+   *  When on, a local attachment-change hint starts a fresh Hello verification
+   *  sweep and may publish the own Adj-LSA once after every sweep target has a
+   *  decisive vanilla result. Off is equivalent to the post-P1 baseline: no
+   *  verify-now ownership, no sweep publication hold, and no change to
+   *  concurrent Hello / Commit1 behavior.
+   */
+  void
+  setEventDrivenAdjacencyVerification(bool isEnabled)
+  {
+    m_isEventDrivenAdjacencyVerificationEnabled = isEnabled;
+  }
+
+  bool
+  getEventDrivenAdjacencyVerification() const
+  {
+    return m_isEventDrivenAdjacencyVerificationEnabled;
+  }
+
   void
   setSyncInterestLifetime(uint32_t syncInterestLifetime)
   {
@@ -528,6 +549,7 @@ private:
   uint32_t m_routingCalcInterval;
 
   bool m_isResultDrivenAdjLsaBuildEnabled = false;
+  bool m_isEventDrivenAdjacencyVerificationEnabled = false;
 
   uint32_t m_faceDatasetFetchTries;
   ndn::time::seconds m_faceDatasetFetchInterval;

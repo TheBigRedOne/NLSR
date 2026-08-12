@@ -69,6 +69,14 @@ BOOST_AUTO_TEST_CASE(ConfParameterSettersAndGetters)
   BOOST_CHECK_EQUAL(cp1.getHyperbolicState(), HYPERBOLIC_STATE_ON);
   BOOST_CHECK(cp1.getCorTheta() == angles);
   BOOST_CHECK_EQUAL(cp1.getInfoInterestInterval(), 3);
+
+  BOOST_CHECK_EQUAL(cp1.getResultDrivenAdjLsaBuild(), false);
+  cp1.setResultDrivenAdjLsaBuild(true);
+  BOOST_CHECK_EQUAL(cp1.getResultDrivenAdjLsaBuild(), true);
+
+  BOOST_CHECK_EQUAL(cp1.getEventDrivenAdjacencyVerification(), false);
+  cp1.setEventDrivenAdjacencyVerification(true);
+  BOOST_CHECK_EQUAL(cp1.getEventDrivenAdjacencyVerification(), true);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

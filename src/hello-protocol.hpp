@@ -13,7 +13,7 @@
  *
  * NLSR is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
  * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- * PURPOSE.  See the GNU General Public License for more details.
+ * PURPOSE.  See the GNU Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along with
  * NLSR, e.g., in COPYING.md file.  If not, see <http://www.gnu.org/licenses/>.
@@ -32,6 +32,10 @@
 #include <ndn-cxx/security/validation-error.hpp>
 #include <ndn-cxx/util/scheduler.hpp>
 #include <ndn-cxx/util/signal.hpp>
+
+#include <map>
+#include <optional>
+#include <set>
 
 namespace nlsr {
 
@@ -52,10 +56,6 @@ public:
    * an incoming Hello Interest on a configured INACTIVE neighbour. The flag is
    * fixed for the lifetime of the physical Hello flow and is used only to decide
    * whether a validated success may request an immediate Adj-LSA build.
-   *
-   * This function attempts to contact neighboring routers to
-   * determine their status (which currently is one of: ACTIVE,
-   * INACTIVE, or UNKNOWN)
    */
   void
   expressInterest(const ndn::Name& interestNamePrefix, uint32_t seconds,
@@ -73,74 +73,127 @@ public:
   sendHelloInterest(const ndn::Name& neighbor);
 
   /*! \brief Processes a Hello Interest from a neighbor.
-   *
-   * \param name (ignored)
-   *
-   * \param interest The Interest object that we have received and need to
-   * process.
-   *
-   * Processes a Hello Interest that this router receives from one of
-   * its neighbors. If the neighbor that sent the Interest does not
-   * have a Face, NLSR will attempt to create one. Also, if the
-   * neighbor that sent the Interest was previously marked as
-   * INACTIVE, NLSR will attempt to contact it with its own Hello
-   * Interest.
    */
   void
   processInterest(const ndn::Name& name, const ndn::Interest& interest);
 
+  /*! \brief Local attachment-change hint: start/restart a mobility verification sweep.
+   *
+   *  No-op when event-driven-adjacency-verification is off. Does not mutate
+   *  adjacency status or LSDB by itself.
+   */
+  void
+  onAttachmentChangeHint();
+
+  /*! \brief Face destroy for a configured neighbour while a sweep may be active.
+   *
+   *  Vanilla INACTIVE / dirty bookkeeping is performed by the caller. When the
+   *  neighbour is a current sweep target, records UNREACHABLE for that target.
+   */
+  void
+  onAdjacentFaceDestroyed(const ndn::Name& neighbor);
+
   ndn::signal::Signal<HelloProtocol, Statistics::PacketType> hpIncrementSignal;
 
 private:
-  /*! \brief Try to contact a neighbor via Hello protocol again
-   *
-   * This function will re-send Hello Interests a configured number
-   * of times. After that many failures, HelloProtocol will mark the neighbor as
-   * inactive and will not attempt to contact them until the next time
-   * HelloProtocol::sendScheduledInterest is called.
-   *
-   * \sa nlsr::ConfParameter::getInterestRetryNumber
-   */
   void
-  processInterestTimedOut(const ndn::Interest& interest, bool isReciprocal);
-
-  /*! \brief Verify signatures and validate incoming Hello data.
-   */
-  void
-  onContent(const ndn::Interest& interest, const ndn::Data& data, bool isReciprocal);
+  onContent(const ndn::Interest& interest, const ndn::Data& data, bool isReciprocal,
+            uint64_t flowToken);
 
 PUBLIC_WITH_TESTS_ELSE_PRIVATE:
+  enum class VerifyResult {
+    REACHABLE,
+    UNREACHABLE,
+    INDETERMINATE,
+  };
 
-  /*! \brief Change a neighbor's status
+  struct AdjHelloControl
+  {
+    ndn::scheduler::ScopedEventId periodicEvent;
+    ndn::ScopedPendingInterestHandle pendingInterest;
+    ndn::scheduler::ScopedEventId nackDelayEvent;
+    uint64_t flowToken = 0;
+  };
+
+  struct MobilitySweep
+  {
+    uint64_t serial = 0;
+    std::set<ndn::Name> targets;
+    std::map<ndn::Name, VerifyResult> results;
+  };
+
+  void
+  onContentValidated(const ndn::Data& data, bool isReciprocal = false, uint64_t flowToken = 0);
+
+  void
+  processInterestTimedOut(const ndn::Interest& interest, bool isReciprocal, uint64_t flowToken);
+
+  /*! \brief Owned-path NACK handler: token-gates before scheduling delayed timeout.
    *
-   * Whenever incoming Hello data is verified and validated, change
-   * the status of this neighbor and then schedule an adjacency LSA
-   * build for us. This also resets the number of times we've failed
-   * to contact this neighbor so that we will retry later.
-   *
-   * When \p isReciprocal is true and result-driven Adj-LSA build is enabled,
-   * any outstanding ordinary Adj-LSA delay is replaced by an immediate build.
-   * Periodic Hello successes never request that immediate path.
+   *  Exposed for tests that simulate a late NACK after async PendingInterest cancel.
    */
   void
-  onContentValidated(const ndn::Data& data, bool isReciprocal = false);
+  onNackOwned(const ndn::Name& neighbor, const ndn::Interest& interest,
+              uint32_t seconds, bool isReciprocal, uint64_t flowToken);
+
+  std::map<ndn::Name, AdjHelloControl> m_adjHello;
+  std::optional<MobilitySweep> m_sweep;
 
 private:
-  /*! \brief Log that incoming data couldn't be validated, but do nothing else.
-   */
   void
-  onContentValidationFailed(const ndn::Data& data,
-                            const ndn::security::ValidationError& ve);
+  onContentValidationFailed(const ndn::Data& data, const ndn::security::ValidationError& ve,
+                            uint64_t flowToken);
 
-  /*! \brief Builds the Hello Interest name for \p neighbour:
-   *         /\<neighbour\>/NLSR/INFO/\<router\>
-   */
   ndn::Name
   makeHelloInterestName(const ndn::Name& neighbour) const;
+
+  bool
+  isEventDrivenOn() const
+  {
+    return m_confParam.getEventDrivenAdjacencyVerification();
+  }
+
+  AdjHelloControl&
+  getAdjControl(const ndn::Name& neighbor);
+
+  void
+  expressInterestVanilla(const ndn::Name& interestName, uint32_t seconds, bool isReciprocal);
+
+  void
+  expressInterestOwned(const ndn::Name& neighbor, const ndn::Name& interestName,
+                       uint32_t seconds, bool isReciprocal, uint64_t flowToken);
+
+  void
+  sendHelloInterestVanilla(const ndn::Name& neighbor);
+
+  void
+  sendHelloInterestOwned(const ndn::Name& neighbor);
+
+  void
+  requestVerificationNow(const ndn::Name& neighbor);
+
+  void
+  beginMobilitySweep();
+
+  void
+  abortMobilitySweep(const std::string& reason);
+
+  void
+  noteSweepResult(const ndn::Name& neighbor, VerifyResult result);
+
+  void
+  checkSweepCompletion();
+
+  std::set<ndn::Name>
+  buildSweepTargets() const;
+
+  ndn::Name
+  neighborFromHelloInterest(const ndn::Interest& interest) const;
 
 public:
   static inline const std::string INFO_COMPONENT{"INFO"};
   static inline const std::string NLSR_COMPONENT{"nlsr"};
+  static inline const ndn::Name VERIFY_NOW_PREFIX{"/localhost/nlsr/optoflood/verify-now"};
 
   ndn::signal::Signal<HelloProtocol, const ndn::Name&> onInitialHelloDataValidated;
 
@@ -153,6 +206,8 @@ private:
   RoutingTable& m_routingTable;
   Lsdb& m_lsdb;
   AdjacencyList& m_adjacencyList;
+
+  uint64_t m_nextSweepSerial = 1;
 };
 
 } // namespace nlsr

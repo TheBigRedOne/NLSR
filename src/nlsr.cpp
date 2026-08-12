@@ -254,6 +254,7 @@ Nlsr::onFaceEventNotification(const ndn::nfd::FaceEventNotification& faceEventNo
             m_lsdb.scheduleAdjLsaBuild();
           }
         }
+        m_helloProtocol.onAdjacentFaceDestroyed(adjacent->getName());
       }
       break;
     }
