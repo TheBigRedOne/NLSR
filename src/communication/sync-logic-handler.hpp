@@ -40,6 +40,7 @@ struct SyncLogicOptions
   ndn::time::milliseconds syncInterestLifetime;
   ndn::Name routerPrefix;
   HyperbolicState hyperbolicState;
+  bool reexpressWhenBehind = false;
 };
 
 inline ndn::Name

@@ -40,7 +40,8 @@ SyncLogicHandler::SyncLogicHandler(ndn::Face& face, ndn::KeyChain& keyChain,
   , m_coorLsaUserPrefix(makeLsaUserPrefix(opts.userPrefix, Lsa::Type::COORDINATE))
   , m_syncLogic(face, keyChain, opts.syncProtocol, opts.syncPrefix,
                 m_nameLsaUserPrefix, opts.syncInterestLifetime,
-                std::bind(&SyncLogicHandler::processUpdate, this, _1, _2, _3))
+                std::bind(&SyncLogicHandler::processUpdate, this, _1, _2, _3),
+                opts.reexpressWhenBehind)
 {
   if (m_hyperbolicState != HYPERBOLIC_STATE_ON) {
     m_syncLogic.addUserNode(m_adjLsaUserPrefix);

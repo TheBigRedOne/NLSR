@@ -45,7 +45,8 @@ Lsdb::Lsdb(ndn::Face& face, ndn::KeyChain& keyChain, ConfParameter& confParam)
         confParam.getSyncUserPrefix(),
         confParam.getSyncInterestLifetime(),
         confParam.getRouterPrefix(),
-        confParam.getHyperbolicState()
+        confParam.getHyperbolicState(),
+        confParam.getEventDrivenAdjacencyVerification()
       })
   , m_lsaRefreshTime(ndn::time::seconds(m_confParam.getLsaRefreshTime()))
   , m_adjLsaBuildInterval(m_confParam.getAdjLsaBuildInterval())
@@ -146,7 +147,7 @@ Lsdb::scheduleAdjLsaBuild()
 }
 
 void
-Lsdb::requestImmediateAdjLsaBuild()
+Lsdb::requestImmediateAdjLsaBuild(bool expressSyncAfterPublish)
 {
   if (m_confParam.getHyperbolicState() == HYPERBOLIC_STATE_ON) {
     NLSR_LOG_DEBUG("Adjacency LSA not built while in hyperbolic routing state");
@@ -165,7 +166,7 @@ Lsdb::requestImmediateAdjLsaBuild()
 
   NLSR_LOG_DEBUG("Building Adjacency LSA now instead of in " << m_adjLsaBuildInterval);
   m_scheduledAdjLsaBuild.cancel();
-  buildAdjLsa();
+  buildAdjLsa(expressSyncAfterPublish);
 }
 
 void
@@ -193,7 +194,7 @@ Lsdb::releaseAdjLsaBuildHold(bool immediateIfDirty)
 
   if (immediateIfDirty) {
     NLSR_LOG_INFO("ADJ LSA HOLD SETTLE: dirty count=" << m_adjBuildCount);
-    requestImmediateAdjLsaBuild();
+    requestImmediateAdjLsaBuild(true);
     return;
   }
 
@@ -370,7 +371,7 @@ Lsdb::removeLsa(const ndn::Name& router, Lsa::Type lsaType)
 }
 
 void
-Lsdb::buildAdjLsa()
+Lsdb::buildAdjLsa(bool expressSyncAfterPublish)
 {
   NLSR_LOG_TRACE("buildAdjLsa called");
 
@@ -393,7 +394,7 @@ Lsdb::buildAdjLsa()
       // It only makes sense to do the adjLsa build if we have neighbors
       if (m_confParam.getAdjacencyList().getNumOfActiveNeighbor() > 0) {
         NLSR_LOG_DEBUG("Building and installing own Adj LSA");
-        buildAndInstallOwnAdjLsa();
+        buildAndInstallOwnAdjLsa(expressSyncAfterPublish);
       }
       // We have no active neighbors, meaning no one can route through
       // us.  So delete our entry in the LSDB. This prevents this
@@ -416,12 +417,13 @@ Lsdb::buildAdjLsa()
     m_isBuildAdjLsaScheduled = true;
     auto schedulingTime = ndn::time::seconds(m_confParam.getInterestRetryNumber() *
                                              m_confParam.getInterestResendTime());
-    m_scheduledAdjLsaBuild = m_scheduler.schedule(schedulingTime, [this] { buildAdjLsa(); });
+    m_scheduledAdjLsaBuild = m_scheduler.schedule(schedulingTime,
+      [this, expressSyncAfterPublish] { buildAdjLsa(expressSyncAfterPublish); });
   }
 }
 
 void
-Lsdb::buildAndInstallOwnAdjLsa()
+Lsdb::buildAndInstallOwnAdjLsa(bool expressSyncAfterPublish)
 {
   AdjLsa adjLsa(m_thisRouterPrefix, m_sequencingManager.getAdjLsaSeq() + 1,
                 getLsaExpirationTimePoint(),
@@ -435,6 +437,13 @@ Lsdb::buildAndInstallOwnAdjLsa()
   }
 
   installLsa(std::make_shared<AdjLsa>(adjLsa));
+
+  if (expressSyncAfterPublish &&
+      m_confParam.getEventDrivenAdjacencyVerification() &&
+      m_confParam.getHyperbolicState() != HYPERBOLIC_STATE_ON) {
+    NLSR_LOG_INFO("ADJ LSA SETTLE: triggering sync after own Adj-LSA publication");
+    m_sync.triggerSync();
+  }
 }
 
 ndn::scheduler::EventId

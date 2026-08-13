@@ -36,7 +36,8 @@ SyncProtocolAdapter::SyncProtocolAdapter(ndn::Face& face,
                                          const ndn::Name& syncPrefix,
                                          const ndn::Name& userPrefix,
                                          ndn::time::milliseconds syncInterestLifetime,
-                                         SyncUpdateCallback syncUpdateCallback)
+                                         SyncUpdateCallback syncUpdateCallback,
+                                         bool reexpressWhenBehind)
   : m_syncProtocol(syncProtocol)
   , m_syncUpdateCallback(std::move(syncUpdateCallback))
 {
@@ -65,6 +66,10 @@ SyncProtocolAdapter::SyncProtocolAdapter(ndn::Face& face,
       psync::FullProducer::Options opts;
       opts.onUpdate = [this] (auto&&... args) { onPSyncUpdate(std::forward<decltype(args)>(args)...); };
       opts.syncInterestLifetime = syncInterestLifetime;
+      opts.reexpressWhenBehind = reexpressWhenBehind;
+      if (reexpressWhenBehind) {
+        NDN_LOG_DEBUG("PSync reexpressWhenBehind enabled");
+      }
       m_psyncLogic = std::make_shared<psync::FullProducer>(face, keyChain, syncPrefix, opts);
       m_psyncLogic->addUserNode(userPrefix);
       break;

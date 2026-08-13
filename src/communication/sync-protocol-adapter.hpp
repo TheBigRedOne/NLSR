@@ -51,7 +51,8 @@ public:
                       const ndn::Name& syncPrefix,
                       const ndn::Name& userPrefix,
                       ndn::time::milliseconds syncInterestLifetime,
-                      SyncUpdateCallback syncUpdateCallback);
+                      SyncUpdateCallback syncUpdateCallback,
+                      bool reexpressWhenBehind = false);
 
   /*! \brief Add user node to Sync
    *

@@ -93,9 +93,13 @@ public:
    *  the ordinary build/install path. Does nothing when no build is outstanding, so a
    *  caller arriving after the delayed build has already run does not publish a second
    *  LSA with the same content.
+   *
+   *  When \p expressSyncAfterPublish is true, a successful own Adj-LSA publication
+   *  also requests an immediate FullSync Interest after publishRoutingUpdate.
+   *  Ordinary callers must leave the default false.
    */
   void
-  requestImmediateAdjLsaBuild();
+  requestImmediateAdjLsaBuild(bool expressSyncAfterPublish = false);
 
   /*! \brief Hold own Adj-LSA builds until releaseAdjLsaBuildHold.
    *
@@ -109,8 +113,10 @@ public:
   /*! \brief End an Adj-LSA build hold.
    *
    *  When \p immediateIfDirty is true and dirty count is outstanding, performs
-   *  requestImmediateAdjLsaBuild. Otherwise, if dirty count is outstanding,
-   *  restores one ordinary debounce schedule without incrementing the count.
+   *  requestImmediateAdjLsaBuild(true) so a successful SETTLE publication can
+   *  re-express FullSync after the own Adj-LSA is published. Otherwise, if dirty
+   *  count is outstanding, restores one ordinary debounce schedule without
+   *  incrementing the count.
    */
   void
   releaseAdjLsaBuildHold(bool immediateIfDirty);
@@ -297,11 +303,11 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
     neighbor.
    */
   void
-  buildAdjLsa();
+  buildAdjLsa(bool expressSyncAfterPublish = false);
 
   /*! \brief Wrapper event to build and install an adj. LSA for this router. */
   void
-  buildAndInstallOwnAdjLsa();
+  buildAndInstallOwnAdjLsa(bool expressSyncAfterPublish = false);
 
   /*! \brief Schedules a refresh/expire event in the scheduler.
     \param lsa The LSA.
