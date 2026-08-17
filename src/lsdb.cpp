@@ -360,8 +360,14 @@ Lsdb::removeLsa(const LsaContainer::index<Lsdb::byName>::type::iterator& lsaIt)
 {
   if (lsaIt != m_lsdb.end()) {
     auto lsaPtr = *lsaIt;
+    const bool ownAdj = (lsaPtr->getOriginRouter() == m_thisRouterPrefix &&
+                         lsaPtr->getType() == Lsa::Type::ADJACENCY);
     NLSR_LOG_DEBUG("Removing LSA:\n" << *lsaPtr);
     m_lsdb.erase(lsaIt);
+    if (ownAdj) {
+      m_scheduledAdjLsaSyncPublish.cancel();
+      m_pendingAdjSyncTrigger = false;
+    }
     onLsdbModified(lsaPtr, LsdbUpdate::REMOVED, {}, {});
   }
 }
@@ -432,10 +438,26 @@ Lsdb::buildAndInstallOwnAdjLsa(bool expressSyncAfterPublish)
                 m_confParam.getAdjacencyList());
   m_sequencingManager.increaseAdjLsaSeq();
   m_sequencingManager.writeSeqNoToFile();
+  const uint64_t seq = m_sequencingManager.getAdjLsaSeq();
+
+  if (m_confParam.getCorridorPrioritisedRouting()) {
+    installLsa(std::make_shared<AdjLsa>(adjLsa));
+    m_pendingAdjSyncTrigger = m_pendingAdjSyncTrigger || expressSyncAfterPublish;
+    if (!m_scheduledAdjLsaSyncPublish) {
+      const auto delay = ndn::time::seconds(m_confParam.getCorridorAdjLsaSyncPublishDelay());
+      NLSR_LOG_DEBUG("Deferring own Adj Sync publication by at most " << delay
+                     << " from first unpublished version");
+      m_scheduledAdjLsaSyncPublish = m_scheduler.schedule(delay, [this] {
+        onDelayedOwnAdjSyncPublication();
+      });
+    }
+    return;
+  }
 
   //Sync adjacency LSAs if link-state or dry-run HR is enabled.
   if (m_confParam.getHyperbolicState() != HYPERBOLIC_STATE_ON) {
-    m_sync.publishRoutingUpdate(Lsa::Type::ADJACENCY, m_sequencingManager.getAdjLsaSeq());
+    m_sync.publishRoutingUpdate(Lsa::Type::ADJACENCY, seq);
+    m_publishedAdjLsaSeq = seq;
   }
 
   installLsa(std::make_shared<AdjLsa>(adjLsa));
@@ -446,6 +468,38 @@ Lsdb::buildAndInstallOwnAdjLsa(bool expressSyncAfterPublish)
     NLSR_LOG_INFO("ADJ LSA SETTLE: triggering sync after own Adj-LSA publication");
     m_sync.triggerSync();
   }
+}
+
+void
+Lsdb::finishOwnAdjSyncPublication(uint64_t seq)
+{
+  m_scheduledAdjLsaSyncPublish.cancel();
+
+  if (m_confParam.getHyperbolicState() != HYPERBOLIC_STATE_ON &&
+      seq > m_publishedAdjLsaSeq) {
+    m_sync.publishRoutingUpdate(Lsa::Type::ADJACENCY, seq);
+    m_publishedAdjLsaSeq = seq;
+  }
+
+  if (m_pendingAdjSyncTrigger &&
+      m_confParam.getEventDrivenAdjacencyVerification() &&
+      m_confParam.getHyperbolicState() != HYPERBOLIC_STATE_ON) {
+    NLSR_LOG_INFO("ADJ LSA SETTLE: triggering sync after own Adj-LSA publication");
+    m_sync.triggerSync();
+  }
+  m_pendingAdjSyncTrigger = false;
+}
+
+void
+Lsdb::onDelayedOwnAdjSyncPublication()
+{
+  auto ownAdj = findLsa(m_thisRouterPrefix, Lsa::Type::ADJACENCY);
+  if (ownAdj == nullptr) {
+    m_scheduledAdjLsaSyncPublish.cancel();
+    m_pendingAdjSyncTrigger = false;
+    return;
+  }
+  finishOwnAdjSyncPublication(ownAdj->getSeqNo());
 }
 
 ndn::scheduler::EventId
@@ -480,7 +534,17 @@ Lsdb::expireOrRefreshLsa(std::shared_ptr<Lsa> lsa)
         // schedule refreshing event again
         lsaPtr->setExpiringEventId(scheduleLsaExpiration(lsaPtr, m_lsaRefreshTime));
         m_sequencingManager.writeSeqNoToFile();
-        m_sync.publishRoutingUpdate(lsaPtr->getType(), m_sequencingManager.getLsaSeq(lsaPtr->getType()));
+        if (lsaPtr->getType() == Lsa::Type::ADJACENCY &&
+            m_confParam.getCorridorPrioritisedRouting()) {
+          finishOwnAdjSyncPublication(m_sequencingManager.getLsaSeq(lsaPtr->getType()));
+        }
+        else {
+          m_sync.publishRoutingUpdate(lsaPtr->getType(),
+                                      m_sequencingManager.getLsaSeq(lsaPtr->getType()));
+          if (lsaPtr->getType() == Lsa::Type::ADJACENCY) {
+            m_publishedAdjLsaSeq = m_sequencingManager.getLsaSeq(lsaPtr->getType());
+          }
+        }
       }
       // Since we cannot refresh other router's LSAs, our only choice is to expire.
       else {

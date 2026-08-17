@@ -497,6 +497,35 @@ ConfFileProcessor::processConfSectionNeighbors(const ConfigSection& section)
   }
   m_confParam.setCorridorPrioritisedRouting(isCorridorPrioritisedRoutingEnabled);
 
+  // corridor-adj-lsa-sync-publish-delay: max seconds from the first unpublished
+  // own Adj-LSA in a batch until global PSync publishName. Later seqs in the
+  // window do not reset the deadline. Used only when corridor-prioritised-routing
+  // is on. 0 still installs first, then publishes on the next scheduler tick.
+  // Signed parse rejects negative text (uint32_t must not wrap) and malformed
+  // present values. Absent uses the default. No protocol upper bound.
+  {
+    const auto delayIt = section.find("corridor-adj-lsa-sync-publish-delay");
+    if (delayIt == section.not_found()) {
+      m_confParam.setCorridorAdjLsaSyncPublishDelay(CORRIDOR_ADJ_LSA_SYNC_PUBLISH_DELAY_DEFAULT);
+    }
+    else {
+      try {
+        const int delay = delayIt->second.get_value<int>();
+        if (delay < 0) {
+          std::cerr << "Invalid value for corridor-adj-lsa-sync-publish-delay: "
+                    << delay << ". Value must be non-negative." << std::endl;
+          return false;
+        }
+        m_confParam.setCorridorAdjLsaSyncPublishDelay(static_cast<uint32_t>(delay));
+      }
+      catch (const std::exception& ex) {
+        std::cerr << "Invalid value for corridor-adj-lsa-sync-publish-delay. "
+                  << ex.what() << std::endl;
+        return false;
+      }
+    }
+  }
+
   // Set the retry count for fetching the FaceStatus dataset
   ConfigurationVariable<uint32_t> faceDatasetFetchTries("face-dataset-fetch-tries",
                                                         std::bind(&ConfParameter::setFaceDatasetFetchTries,

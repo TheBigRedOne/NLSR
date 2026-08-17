@@ -320,6 +320,20 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   void
   buildAndInstallOwnAdjLsa(bool expressSyncAfterPublish = false);
 
+  /*! \brief Complete own Adj Sync publication and any pending SETTLE triggerSync.
+   *
+   *  Consumes the delayed publication event. If \p seq is newer than the last
+   *  seq actually passed to publishRoutingUpdate and HR is not ON, publishes
+   *  that seq. Then, if a SETTLE trigger is pending and event-driven verification
+   *  is on, calls triggerSync. Always clears the pending SETTLE flag.
+   */
+  void
+  finishOwnAdjSyncPublication(uint64_t seq);
+
+  /*! \brief Delayed-timer fire: publish the currently installed own Adj seq. */
+  void
+  onDelayedOwnAdjSyncPublication();
+
   /*! \brief Schedules a refresh/expire event in the scheduler.
     \param lsa The LSA.
     \param expTime How many seconds to wait before triggering the event.
@@ -418,6 +432,14 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   bool m_adjLsaBuildHeld = false;
   int64_t m_adjBuildCount;
   ndn::scheduler::ScopedEventId m_scheduledAdjLsaBuild;
+
+  // Bounded own-Adj Sync publication deferral (corridor-prioritised-routing on).
+  // The timer is a max deferral from the first unpublished seq in a batch;
+  // later installs do not reset it. m_publishedAdjLsaSeq is the highest seq
+  // actually passed to publishRoutingUpdate.
+  ndn::scheduler::ScopedEventId m_scheduledAdjLsaSyncPublish;
+  bool m_pendingAdjSyncTrigger = false;
+  uint64_t m_publishedAdjLsaSeq = 0;
 
   ndn::InMemoryStoragePersistent m_lsaStorage;
 

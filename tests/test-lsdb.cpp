@@ -100,6 +100,38 @@ public:
     conf.getAdjacencyList().insert(adj);
   }
 
+  ndn::Name
+  makeOwnAdjLsaInterestName(uint64_t seq) const
+  {
+    ndn::Name name = conf.getLsaPrefix();
+    name.append(conf.getRouterPrefix().getSubName(conf.getNetwork().size()));
+    name.append("ADJACENCY");
+    name.appendNumber(seq);
+    return name;
+  }
+
+  bool
+  ownAdjLsaIsFetchable(uint64_t seq)
+  {
+    face.sentData.clear();
+    const ndn::Name name = makeOwnAdjLsaInterestName(seq);
+    lsdb.processInterest(name, ndn::Interest(name));
+    advanceClocks(10_ms);
+    for (const auto& data : face.sentData) {
+      if (name.isPrefixOf(data.getName())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void
+  buildOwnAdjImmediately(bool expressSyncAfterPublish = false)
+  {
+    lsdb.scheduleAdjLsaBuild();
+    lsdb.requestImmediateAdjLsaBuild(expressSyncAfterPublish);
+  }
+
   void
   connectSignal()
   {
@@ -695,6 +727,310 @@ BOOST_AUTO_TEST_CASE(CorridorFetchDoesNotPoisonHighestSeqNo)
   BOOST_CHECK(found);
   BOOST_CHECK(lsdb.hasHighestSeqNo(lsaName));
   BOOST_CHECK_EQUAL(lsdb.getHighestSeqNo(lsaName), 5);
+}
+
+BOOST_AUTO_TEST_CASE(OffPublishesOwnAdjImmediately)
+{
+  insertActiveNeighbor();
+  face.sentInterests.clear();
+  buildOwnAdjImmediately();
+  advanceClocks(10_ms);
+
+  auto adjLsa = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(adjLsa != nullptr);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, adjLsa->getSeqNo());
+  BOOST_CHECK(!lsdb.m_scheduledAdjLsaSyncPublish);
+  BOOST_CHECK(!lsdb.m_pendingAdjSyncTrigger);
+}
+
+BOOST_AUTO_TEST_CASE(OnInstallsOwnAdjBeforeSyncPublication)
+{
+  conf.setCorridorPrioritisedRouting(true);
+  conf.setCorridorAdjLsaSyncPublishDelay(1);
+  insertActiveNeighbor();
+  buildOwnAdjImmediately();
+
+  auto adjLsa = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(adjLsa != nullptr);
+  const uint64_t seq = adjLsa->getSeqNo();
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+  BOOST_CHECK(lsdb.m_scheduledAdjLsaSyncPublish);
+  BOOST_CHECK(ownAdjLsaIsFetchable(seq));
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+
+  advanceClocks(1_s);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, seq);
+  BOOST_CHECK(!lsdb.m_scheduledAdjLsaSyncPublish);
+}
+
+BOOST_AUTO_TEST_CASE(OnSettlePublishesThenTriggersSync)
+{
+  conf.setCorridorPrioritisedRouting(true);
+  conf.setCorridorAdjLsaSyncPublishDelay(1);
+  conf.setEventDrivenAdjacencyVerification(true);
+  insertActiveNeighbor();
+
+  lsdb.scheduleAdjLsaBuild();
+  lsdb.holdAdjLsaBuild();
+  face.sentInterests.clear();
+  lsdb.releaseAdjLsaBuildHold(true);
+
+  auto adjLsa = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(adjLsa != nullptr);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+  BOOST_CHECK(lsdb.m_pendingAdjSyncTrigger);
+  BOOST_CHECK_EQUAL(countSyncInterests(), 0);
+
+  advanceClocks(1_s);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, adjLsa->getSeqNo());
+  BOOST_CHECK(!lsdb.m_pendingAdjSyncTrigger);
+  BOOST_CHECK_EQUAL(countSyncInterests(), 1);
+}
+
+BOOST_AUTO_TEST_CASE(OnBatchesLaterSeqWithoutResettingTimer)
+{
+  conf.setCorridorPrioritisedRouting(true);
+  conf.setCorridorAdjLsaSyncPublishDelay(1);
+  insertActiveNeighbor();
+  buildOwnAdjImmediately();
+
+  auto first = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(first != nullptr);
+  const uint64_t seqN = first->getSeqNo();
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+
+  Adjacent adj2("/ndn/site/%C1.Router/n2", ndn::FaceUri("udp4://10.0.0.2:6363"),
+                10, Adjacent::STATUS_ACTIVE, 0, 2);
+  conf.getAdjacencyList().insert(adj2);
+  buildOwnAdjImmediately();
+
+  auto second = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(second != nullptr);
+  const uint64_t seqN1 = second->getSeqNo();
+  BOOST_CHECK_GT(seqN1, seqN);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+  BOOST_CHECK(lsdb.m_scheduledAdjLsaSyncPublish);
+
+  advanceClocks(1_s);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, seqN1);
+  BOOST_CHECK_NE(lsdb.m_publishedAdjLsaSeq, seqN);
+}
+
+BOOST_AUTO_TEST_CASE(OnFixedWindowPublishesAtOriginalDeadline)
+{
+  conf.setCorridorPrioritisedRouting(true);
+  conf.setCorridorAdjLsaSyncPublishDelay(1);
+  insertActiveNeighbor();
+  buildOwnAdjImmediately();
+
+  auto first = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(first != nullptr);
+  const uint64_t seqN = first->getSeqNo();
+
+  advanceClocks(900_ms);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+
+  Adjacent adj2("/ndn/site/%C1.Router/n2", ndn::FaceUri("udp4://10.0.0.2:6363"),
+                10, Adjacent::STATUS_ACTIVE, 0, 2);
+  conf.getAdjacencyList().insert(adj2);
+  buildOwnAdjImmediately();
+  auto second = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(second != nullptr);
+  const uint64_t seqN1 = second->getSeqNo();
+  BOOST_CHECK_GT(seqN1, seqN);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+
+  advanceClocks(100_ms);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, seqN1);
+}
+
+BOOST_AUTO_TEST_CASE(OnRefreshPublishesAndFulfillsPendingSettle)
+{
+  conf.setCorridorPrioritisedRouting(true);
+  conf.setCorridorAdjLsaSyncPublishDelay(2);
+  conf.setEventDrivenAdjacencyVerification(true);
+  insertActiveNeighbor();
+
+  lsdb.scheduleAdjLsaBuild();
+  lsdb.holdAdjLsaBuild();
+  lsdb.releaseAdjLsaBuildHold(true);
+  auto adjLsa = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(adjLsa != nullptr);
+  BOOST_CHECK(lsdb.m_pendingAdjSyncTrigger);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+
+  face.sentInterests.clear();
+  lsdb.expireOrRefreshLsa(adjLsa);
+  advanceClocks(1_s);
+
+  auto refreshed = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(refreshed != nullptr);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, refreshed->getSeqNo());
+  BOOST_CHECK(!lsdb.m_pendingAdjSyncTrigger);
+  BOOST_CHECK(!lsdb.m_scheduledAdjLsaSyncPublish);
+  BOOST_CHECK_EQUAL(countSyncInterests(), 1);
+
+  const uint64_t published = lsdb.m_publishedAdjLsaSeq;
+  advanceClocks(2_s);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, published);
+}
+
+BOOST_AUTO_TEST_CASE(OnNameRefreshDoesNotConsumeAdjDeferral)
+{
+  conf.setCorridorPrioritisedRouting(true);
+  conf.setCorridorAdjLsaSyncPublishDelay(2);
+  conf.setEventDrivenAdjacencyVerification(true);
+  insertActiveNeighbor();
+
+  lsdb.scheduleAdjLsaBuild();
+  lsdb.holdAdjLsaBuild();
+  lsdb.releaseAdjLsaBuildHold(true);
+  BOOST_CHECK(lsdb.m_pendingAdjSyncTrigger);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+
+  auto nameLsa = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::NAME);
+  BOOST_REQUIRE(nameLsa != nullptr);
+  lsdb.expireOrRefreshLsa(nameLsa);
+
+  lsdb.buildAndInstallOwnCoordinateLsa();
+  auto corLsa = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::COORDINATE);
+  BOOST_REQUIRE(corLsa != nullptr);
+  lsdb.expireOrRefreshLsa(corLsa);
+
+  BOOST_CHECK(lsdb.m_pendingAdjSyncTrigger);
+  BOOST_CHECK(lsdb.m_scheduledAdjLsaSyncPublish);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+
+  advanceClocks(2_s);
+  auto adjLsa = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(adjLsa != nullptr);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, adjLsa->getSeqNo());
+}
+
+BOOST_AUTO_TEST_CASE(OnOwnAdjRemovalClearsDeferredPublication)
+{
+  conf.setCorridorPrioritisedRouting(true);
+  conf.setCorridorAdjLsaSyncPublishDelay(2);
+  conf.setEventDrivenAdjacencyVerification(true);
+  insertActiveNeighbor();
+
+  lsdb.scheduleAdjLsaBuild();
+  lsdb.holdAdjLsaBuild();
+  lsdb.releaseAdjLsaBuildHold(true);
+  BOOST_CHECK(lsdb.m_pendingAdjSyncTrigger);
+  BOOST_CHECK(lsdb.m_scheduledAdjLsaSyncPublish);
+
+  face.sentInterests.clear();
+  lsdb.removeLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_CHECK(!lsdb.m_pendingAdjSyncTrigger);
+  BOOST_CHECK(!lsdb.m_scheduledAdjLsaSyncPublish);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+  BOOST_CHECK_EQUAL(countSyncInterests(), 0);
+
+  advanceClocks(2_s);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+  BOOST_CHECK_EQUAL(countSyncInterests(), 0);
+}
+
+BOOST_AUTO_TEST_CASE(OnSeqOnlyRebuildPublishesLatestSeq)
+{
+  conf.setCorridorPrioritisedRouting(true);
+  conf.setCorridorAdjLsaSyncPublishDelay(1);
+  insertActiveNeighbor();
+  buildOwnAdjImmediately();
+
+  auto first = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(first != nullptr);
+  const uint64_t seqN = first->getSeqNo();
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+
+  buildOwnAdjImmediately();
+  auto second = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(second != nullptr);
+  const uint64_t seqN1 = second->getSeqNo();
+  BOOST_CHECK_GT(seqN1, seqN);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+
+  advanceClocks(1_s);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, seqN1);
+}
+
+BOOST_AUTO_TEST_CASE(OnDoesNotDelayNameLsaPublication)
+{
+  conf.setCorridorPrioritisedRouting(true);
+  conf.setCorridorAdjLsaSyncPublishDelay(2);
+  insertActiveNeighbor();
+  buildOwnAdjImmediately();
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+
+  auto before = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::NAME);
+  BOOST_REQUIRE(before != nullptr);
+  const uint64_t nameSeq = before->getSeqNo();
+  lsdb.buildAndInstallOwnNameLsa();
+  auto after = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::NAME);
+  BOOST_REQUIRE(after != nullptr);
+  BOOST_CHECK_GT(after->getSeqNo(), nameSeq);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+  BOOST_CHECK(lsdb.m_scheduledAdjLsaSyncPublish);
+}
+
+BOOST_AUTO_TEST_CASE(OnSchedulesNewWindowAfterPreviousPublication)
+{
+  conf.setCorridorPrioritisedRouting(true);
+  conf.setCorridorAdjLsaSyncPublishDelay(1);
+  insertActiveNeighbor();
+  buildOwnAdjImmediately();
+
+  auto first = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(first != nullptr);
+  const uint64_t seqN = first->getSeqNo();
+  BOOST_CHECK(lsdb.m_scheduledAdjLsaSyncPublish);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+
+  advanceClocks(1_s);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, seqN);
+  BOOST_CHECK(!lsdb.m_scheduledAdjLsaSyncPublish);
+
+  Adjacent adj2("/ndn/site/%C1.Router/n2", ndn::FaceUri("udp4://10.0.0.2:6363"),
+                10, Adjacent::STATUS_ACTIVE, 0, 2);
+  conf.getAdjacencyList().insert(adj2);
+  buildOwnAdjImmediately();
+
+  auto second = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(second != nullptr);
+  const uint64_t seqN1 = second->getSeqNo();
+  BOOST_CHECK_GT(seqN1, seqN);
+  BOOST_CHECK(lsdb.m_scheduledAdjLsaSyncPublish);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, seqN);
+
+  advanceClocks(999_ms);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, seqN);
+  BOOST_CHECK(lsdb.m_scheduledAdjLsaSyncPublish);
+
+  advanceClocks(1_ms);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, seqN1);
+  BOOST_CHECK(!lsdb.m_scheduledAdjLsaSyncPublish);
+}
+
+BOOST_AUTO_TEST_CASE(OnZeroDelayInstallsThenPublishesOnScheduler)
+{
+  conf.setCorridorPrioritisedRouting(true);
+  conf.setCorridorAdjLsaSyncPublishDelay(0);
+  insertActiveNeighbor();
+  buildOwnAdjImmediately();
+
+  auto adjLsa = lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY);
+  BOOST_REQUIRE(adjLsa != nullptr);
+  const uint64_t seq = adjLsa->getSeqNo();
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, 0);
+  BOOST_CHECK(lsdb.m_scheduledAdjLsaSyncPublish);
+
+  advanceClocks(1_ns);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, seq);
+  BOOST_CHECK(!lsdb.m_scheduledAdjLsaSyncPublish);
+
+  advanceClocks(1_s);
+  BOOST_CHECK_EQUAL(lsdb.m_publishedAdjLsaSeq, seq);
 }
 
 BOOST_AUTO_TEST_SUITE_END() // TestLsdb

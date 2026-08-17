@@ -40,6 +40,7 @@ ConfParameter::ConfParameter(ndn::Face& face, ndn::KeyChain& keyChain,
   : m_confFileName(confFileName)
   , m_lsaRefreshTime(LSA_REFRESH_TIME_DEFAULT)
   , m_adjLsaBuildInterval(ADJ_LSA_BUILD_INTERVAL_DEFAULT)
+  , m_corridorAdjLsaSyncPublishDelay(CORRIDOR_ADJ_LSA_SYNC_PUBLISH_DELAY_DEFAULT)
   , m_routingCalcInterval(ROUTING_CALC_INTERVAL_DEFAULT)
   , m_faceDatasetFetchInterval(ndn::time::seconds(static_cast<int>(FACE_DATASET_FETCH_INTERVAL_DEFAULT)))
   , m_lsaInterestLifetime(ndn::time::seconds(static_cast<int>(LSA_INTEREST_LIFETIME_DEFAULT)))
@@ -96,6 +97,8 @@ ConfParameter::writeLog()
                 << (m_isEventDrivenAdjacencyVerificationEnabled ? "on" : "off"));
   NLSR_LOG_INFO("Corridor-prioritised routing: "
                 << (m_isCorridorPrioritisedRoutingEnabled ? "on" : "off"));
+  NLSR_LOG_INFO("Corridor Adj-LSA Sync publish delay (max deferral from first unpublished, s): "
+                << m_corridorAdjLsaSyncPublishDelay);
 }
 
 void

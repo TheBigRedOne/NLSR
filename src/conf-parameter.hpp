@@ -60,6 +60,10 @@ enum {
 };
 
 enum {
+  CORRIDOR_ADJ_LSA_SYNC_PUBLISH_DELAY_DEFAULT = 1
+};
+
+enum {
   ROUTING_CALC_INTERVAL_MIN = 0,
   ROUTING_CALC_INTERVAL_DEFAULT = 15,
   ROUTING_CALC_INTERVAL_MAX = 15
@@ -253,6 +257,23 @@ public:
   getAdjLsaBuildInterval() const
   {
     return m_adjLsaBuildInterval;
+  }
+
+  /*! \brief Maximum own-Adj Sync publication deferral when corridor-prioritised-routing is on.
+   *
+   *  Measured in seconds from the first currently unpublished own Adj-LSA in a batch.
+   *  Later versions in the same window do not reset the deadline. Off ignores this value.
+   */
+  void
+  setCorridorAdjLsaSyncPublishDelay(uint32_t delay)
+  {
+    m_corridorAdjLsaSyncPublishDelay = delay;
+  }
+
+  uint32_t
+  getCorridorAdjLsaSyncPublishDelay() const
+  {
+    return m_corridorAdjLsaSyncPublishDelay;
   }
 
   void
@@ -563,6 +584,7 @@ private:
   uint32_t  m_lsaRefreshTime;
 
   uint32_t m_adjLsaBuildInterval;
+  uint32_t m_corridorAdjLsaSyncPublishDelay = CORRIDOR_ADJ_LSA_SYNC_PUBLISH_DELAY_DEFAULT;
   uint32_t m_routingCalcInterval;
 
   bool m_isResultDrivenAdjLsaBuildEnabled = false;

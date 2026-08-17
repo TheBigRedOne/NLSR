@@ -193,6 +193,7 @@ BOOST_AUTO_TEST_CASE(LinkState)
 
   BOOST_CHECK_EQUAL(conf.getAdjLsaBuildInterval(), 10);
   BOOST_CHECK_EQUAL(conf.getCorridorPrioritisedRouting(), false);
+  BOOST_CHECK_EQUAL(conf.getCorridorAdjLsaSyncPublishDelay(), 1);
 
   BOOST_CHECK(conf.getAdjacencyList().isNeighbor("/ndn/memphis.edu/cs/mira"));
   BOOST_CHECK(conf.getAdjacencyList().isNeighbor("/ndn/memphis.edu/cs/castor"));
@@ -311,6 +312,8 @@ BOOST_AUTO_TEST_CASE(DefaultValuesNeighbors)
   BOOST_CHECK_EQUAL(conf.getInfoInterestInterval(), static_cast<uint32_t>(HELLO_INTERVAL_DEFAULT));
   BOOST_CHECK_EQUAL(conf.getAdjLsaBuildInterval(),
                     static_cast<uint32_t>(ADJ_LSA_BUILD_INTERVAL_DEFAULT));
+  BOOST_CHECK_EQUAL(conf.getCorridorAdjLsaSyncPublishDelay(),
+                    static_cast<uint32_t>(CORRIDOR_ADJ_LSA_SYNC_PUBLISH_DELAY_DEFAULT));
 }
 
 BOOST_AUTO_TEST_CASE(CorridorPrioritisedRoutingOn)
@@ -320,6 +323,50 @@ BOOST_AUTO_TEST_CASE(CorridorPrioritisedRoutingOn)
                      "adj-lsa-build-interval 10\n  corridor-prioritised-routing on");
   BOOST_REQUIRE(processConfigurationString(config));
   BOOST_CHECK_EQUAL(conf.getCorridorPrioritisedRouting(), true);
+  BOOST_CHECK_EQUAL(conf.getCorridorAdjLsaSyncPublishDelay(), 1);
+}
+
+BOOST_AUTO_TEST_CASE(CorridorAdjLsaSyncPublishDelayParsed)
+{
+  std::string config = SECTION_NEIGHBORS;
+  boost::replace_all(config, "adj-lsa-build-interval 10",
+                     "adj-lsa-build-interval 10\n  corridor-adj-lsa-sync-publish-delay 5");
+  BOOST_REQUIRE(processConfigurationString(config));
+  BOOST_CHECK_EQUAL(conf.getCorridorAdjLsaSyncPublishDelay(), 5);
+}
+
+BOOST_AUTO_TEST_CASE(CorridorAdjLsaSyncPublishDelayZero)
+{
+  std::string config = SECTION_NEIGHBORS;
+  boost::replace_all(config, "adj-lsa-build-interval 10",
+                     "adj-lsa-build-interval 10\n  corridor-adj-lsa-sync-publish-delay 0");
+  BOOST_REQUIRE(processConfigurationString(config));
+  BOOST_CHECK_EQUAL(conf.getCorridorAdjLsaSyncPublishDelay(), 0);
+}
+
+BOOST_AUTO_TEST_CASE(CorridorAdjLsaSyncPublishDelayAboveThirty)
+{
+  std::string config = SECTION_NEIGHBORS;
+  boost::replace_all(config, "adj-lsa-build-interval 10",
+                     "adj-lsa-build-interval 10\n  corridor-adj-lsa-sync-publish-delay 60");
+  BOOST_REQUIRE(processConfigurationString(config));
+  BOOST_CHECK_EQUAL(conf.getCorridorAdjLsaSyncPublishDelay(), 60);
+}
+
+BOOST_AUTO_TEST_CASE(CorridorAdjLsaSyncPublishDelayNegative)
+{
+  std::string config = SECTION_NEIGHBORS;
+  boost::replace_all(config, "adj-lsa-build-interval 10",
+                     "adj-lsa-build-interval 10\n  corridor-adj-lsa-sync-publish-delay -1");
+  BOOST_CHECK_EQUAL(processConfigurationString(config), false);
+}
+
+BOOST_AUTO_TEST_CASE(CorridorAdjLsaSyncPublishDelayMalformed)
+{
+  std::string config = SECTION_NEIGHBORS;
+  boost::replace_all(config, "adj-lsa-build-interval 10",
+                     "adj-lsa-build-interval 10\n  corridor-adj-lsa-sync-publish-delay not-a-number");
+  BOOST_CHECK_EQUAL(processConfigurationString(config), false);
 }
 
 BOOST_AUTO_TEST_CASE(CanonizeNeighbors)
