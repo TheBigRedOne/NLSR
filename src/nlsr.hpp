@@ -29,6 +29,7 @@
 #include "name-prefix-list.hpp"
 #include "test-access-control.hpp"
 #include "topology-change-observer.hpp"
+#include "corridor.hpp"
 #include "publisher/dataset-interest-handler.hpp"
 #include "route/fib.hpp"
 #include "route/name-prefix-table.hpp"
@@ -51,6 +52,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 
 namespace nlsr {
 
@@ -222,6 +224,7 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
 
   StatsCollector m_statsCollector;
   TopologyChangeObserver m_topologyObserver;
+  std::unique_ptr<Corridor> m_corridor;
 
 private:
   ndn::signal::ScopedConnection m_onOriginSettled;

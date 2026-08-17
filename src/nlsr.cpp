@@ -144,6 +144,11 @@ Nlsr::Nlsr(ndn::Face& face, ndn::KeyChain& keyChain, ConfParameter& confParam)
       neighbor.setLinkCost(0);
     }
   }
+
+  if (m_confParam.getCorridorPrioritisedRouting()) {
+    m_corridor = std::make_unique<Corridor>(m_face, keyChain, m_confParam, m_lsdb);
+    m_corridor->start();
+  }
 }
 
 void
@@ -215,6 +220,10 @@ Nlsr::onFaceEventNotification(const ndn::nfd::FaceEventNotification& faceEventNo
   switch (faceEventNotification.getKind()) {
     case ndn::nfd::FACE_EVENT_DESTROYED: {
       uint64_t faceId = faceEventNotification.getFaceId();
+
+      if (m_corridor) {
+        m_corridor->onFaceDestroyed(faceId);
+      }
 
       auto adjacent = m_adjacencyList.findAdjacent(faceId);
 

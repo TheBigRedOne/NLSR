@@ -311,6 +311,60 @@ BOOST_AUTO_TEST_CASE(SourceRouterAbsent)
   BOOST_CHECK(routingTable.m_rTable.empty());
 }
 
+BOOST_AUTO_TEST_CASE(ProducerAdjOnlyNewEdgeUnusable)
+{
+  const ndn::Name producer("/ndn/site/%C1.Router/producer");
+  AdjacencyList producerAdj;
+  producerAdj.insert(Adjacent(ROUTER_A_NAME, ROUTER_A_FACE, 5.0, Adjacent::STATUS_ACTIVE, 0, 0));
+  lsdb.installLsa(std::make_shared<AdjLsa>(producer, 1, MAX_TIME, producerAdj));
+
+  calculatePath();
+  BOOST_CHECK(routingTable.findRoutingTableEntry(producer) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(ReciprocalProducerNewApEdgeUsable)
+{
+  const ndn::Name producer("/ndn/site/%C1.Router/producer");
+  const ndn::FaceUri producerFace("udp4://10.0.0.9:6363");
+
+  conf.getAdjacencyList().insert(Adjacent(producer, producerFace, 5.0, Adjacent::STATUS_ACTIVE, 0, 1));
+  lsdb.installLsa(std::make_shared<AdjLsa>(ROUTER_A_NAME, 1, MAX_TIME, conf.getAdjacencyList()));
+
+  AdjacencyList producerAdj;
+  producerAdj.insert(Adjacent(ROUTER_A_NAME, ROUTER_A_FACE, 5.0, Adjacent::STATUS_ACTIVE, 0, 0));
+  lsdb.installLsa(std::make_shared<AdjLsa>(producer, 1, MAX_TIME, producerAdj));
+
+  calculatePath();
+  checkRoutingTableEntry(producer, {
+    {producerFace, 5.0},
+  });
+}
+
+BOOST_AUTO_TEST_CASE(StaleOldApDoesNotBreakNewReciprocalEdge)
+{
+  const ndn::Name producer("/ndn/site/%C1.Router/producer");
+  const ndn::Name oldAp("/ndn/site/%C1.Router/oldap");
+  const ndn::FaceUri producerFace("udp4://10.0.0.9:6363");
+  const ndn::FaceUri oldApFace("udp4://10.0.0.8:6363");
+
+  conf.getAdjacencyList().insert(Adjacent(producer, producerFace, 5.0, Adjacent::STATUS_ACTIVE, 0, 1));
+  lsdb.installLsa(std::make_shared<AdjLsa>(ROUTER_A_NAME, 1, MAX_TIME, conf.getAdjacencyList()));
+
+  AdjacencyList producerAdj;
+  producerAdj.insert(Adjacent(ROUTER_A_NAME, ROUTER_A_FACE, 5.0, Adjacent::STATUS_ACTIVE, 0, 0));
+  lsdb.installLsa(std::make_shared<AdjLsa>(producer, 2, MAX_TIME, producerAdj));
+
+  AdjacencyList oldAdj;
+  oldAdj.insert(Adjacent(producer, producerFace, 5.0, Adjacent::STATUS_ACTIVE, 0, 0));
+  lsdb.installLsa(std::make_shared<AdjLsa>(oldAp, 1, MAX_TIME, oldAdj));
+
+  calculatePath();
+  checkRoutingTableEntry(producer, {
+    {producerFace, 5.0},
+  });
+  BOOST_CHECK(routingTable.findRoutingTableEntry(oldAp) == nullptr);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 } // namespace nlsr::tests

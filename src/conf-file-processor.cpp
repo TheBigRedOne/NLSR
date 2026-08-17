@@ -488,6 +488,15 @@ ConfFileProcessor::processConfSectionNeighbors(const ConfigSection& section)
   }
   m_confParam.setEventDrivenAdjacencyVerification(isEventDrivenVerificationEnabled);
 
+  // corridor-prioritised-routing: one-hop ordinary LSA availability along
+  // ServiceBranch faces. Off keeps Hello / sweep / Adj-LSA / PSync / TFIB.
+  bool isCorridorPrioritisedRoutingEnabled = false;
+  if (!parseSwitch(section, "corridor-prioritised-routing",
+                   isCorridorPrioritisedRoutingEnabled)) {
+    return false;
+  }
+  m_confParam.setCorridorPrioritisedRouting(isCorridorPrioritisedRoutingEnabled);
+
   // Set the retry count for fetching the FaceStatus dataset
   ConfigurationVariable<uint32_t> faceDatasetFetchTries("face-dataset-fetch-tries",
                                                         std::bind(&ConfParameter::setFaceDatasetFetchTries,

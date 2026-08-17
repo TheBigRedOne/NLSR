@@ -457,6 +457,23 @@ public:
     return m_isEventDrivenAdjacencyVerificationEnabled;
   }
 
+  /*! \brief Enables one-hop corridor advertisement of ordinary verified LSAs
+   *         along ServiceBranch faces.
+   *
+   *  Off preserves Hello / sweep / Adj-LSA / PSync / TFIB behavior.
+   */
+  void
+  setCorridorPrioritisedRouting(bool isEnabled)
+  {
+    m_isCorridorPrioritisedRoutingEnabled = isEnabled;
+  }
+
+  bool
+  getCorridorPrioritisedRouting() const
+  {
+    return m_isCorridorPrioritisedRoutingEnabled;
+  }
+
   void
   setSyncInterestLifetime(uint32_t syncInterestLifetime)
   {
@@ -550,6 +567,7 @@ private:
 
   bool m_isResultDrivenAdjLsaBuildEnabled = false;
   bool m_isEventDrivenAdjacencyVerificationEnabled = false;
+  bool m_isCorridorPrioritisedRoutingEnabled = false;
 
   uint32_t m_faceDatasetFetchTries;
   ndn::time::seconds m_faceDatasetFetchInterval;

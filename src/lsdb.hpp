@@ -139,6 +139,17 @@ public:
   void
   processInterest(const ndn::Name& name, const ndn::Interest& interest);
 
+  /*! \brief Fetch an ordinary LSA from a specific face without touching m_highestSeqNo
+   *         before validation.
+   *
+   *  Used by corridor availability. Must not be used as a substitute for vanilla
+   *  expressInterest(). Retries keep the same faceId and do not enter onFetchLsaError().
+   *  Maximum three attempts. Failures give up; global PSync remains the fallback.
+   */
+  void
+  fetchLsaFromFace(const ndn::Name& originRouter, Lsa::Type lsaType, uint64_t seqNo,
+                   uint64_t faceId, uint32_t attempt = 0);
+
   bool
   getIsBuildAdjLsaScheduled() const
   {
@@ -410,8 +421,24 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
 
   ndn::InMemoryStoragePersistent m_lsaStorage;
 
+  static constexpr uint32_t CORRIDOR_LSA_FETCH_MAX_ATTEMPTS = 3;
+
   static inline const ndn::time::steady_clock::time_point DEFAULT_LSA_RETRIEVAL_DEADLINE =
     ndn::time::steady_clock::time_point::min();
+
+PUBLIC_WITH_TESTS_ELSE_PRIVATE:
+  uint64_t
+  getHighestSeqNo(const ndn::Name& lsaName) const
+  {
+    auto it = m_highestSeqNo.find(lsaName);
+    return it == m_highestSeqNo.end() ? 0 : it->second;
+  }
+
+  bool
+  hasHighestSeqNo(const ndn::Name& lsaName) const
+  {
+    return m_highestSeqNo.find(lsaName) != m_highestSeqNo.end();
+  }
 };
 
 } // namespace nlsr

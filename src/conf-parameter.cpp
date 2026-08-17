@@ -94,6 +94,8 @@ ConfParameter::writeLog()
                 << (m_isResultDrivenAdjLsaBuildEnabled ? "on" : "off"));
   NLSR_LOG_INFO("Event-driven adjacency verification (mobility sweep): "
                 << (m_isEventDrivenAdjacencyVerificationEnabled ? "on" : "off"));
+  NLSR_LOG_INFO("Corridor-prioritised routing: "
+                << (m_isCorridorPrioritisedRoutingEnabled ? "on" : "off"));
 }
 
 void

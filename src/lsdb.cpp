@@ -27,6 +27,8 @@
 
 #include <ndn-cxx/lp/tags.hpp>
 
+#include <boost/lexical_cast.hpp>
+
 namespace nlsr {
 
 INIT_LOGGER(Lsdb);
@@ -555,6 +557,67 @@ Lsdb::expressInterest(const ndn::Name& interestName, uint32_t timeoutCount, uint
 
   Lsa::Type lsaType;
   std::istringstream(interestName[-2].toUri()) >> lsaType;
+  incrementInterestSentStats(lsaType);
+}
+
+void
+Lsdb::fetchLsaFromFace(const ndn::Name& originRouter, Lsa::Type lsaType, uint64_t seqNo,
+                       uint64_t faceId, uint32_t attempt)
+{
+  if (faceId == 0 || attempt >= CORRIDOR_LSA_FETCH_MAX_ATTEMPTS) {
+    NLSR_LOG_DEBUG("Corridor LSA fetch give-up origin=" << originRouter
+                   << " type=" << lsaType << " seq=" << seqNo
+                   << " face=" << faceId << " attempt=" << attempt);
+    return;
+  }
+
+  ndn::Name interestName = m_confParam.getLsaPrefix();
+  interestName.append(originRouter.getSubName(m_confParam.getNetwork().size()));
+  interestName.append(boost::lexical_cast<std::string>(lsaType));
+  interestName.appendNumber(seqNo);
+
+  ndn::Interest interest(interestName);
+  interest.setTag(std::make_shared<ndn::lp::NextHopFaceIdTag>(faceId));
+
+  ndn::SegmentFetcher::Options options;
+  options.interestLifetime = m_confParam.getLsaInterestLifetime();
+  options.maxTimeout = m_confParam.getLsaInterestLifetime();
+
+  NLSR_LOG_DEBUG("Corridor fetching LSA: " << interestName << " face=" << faceId
+                 << " attempt=" << attempt);
+  auto fetcher = ndn::SegmentFetcher::start(m_face, interest, m_confParam.getValidator(), options);
+  auto it = m_fetchers.insert(fetcher).first;
+
+  fetcher->afterSegmentValidated.connect([this] (const ndn::Data& data) {
+    afterSegmentValidatedSignal(data);
+    auto lsaSegment = std::make_shared<const ndn::Data>(data);
+    m_lsaStorage.insert(*lsaSegment);
+    m_scheduler.schedule(ndn::time::seconds(LSA_REFRESH_TIME_DEFAULT),
+                         [this, name = lsaSegment->getName()] { m_lsaStorage.erase(name); });
+  });
+
+  fetcher->onComplete.connect([this, it, interestName] (const ndn::ConstBufferPtr& bufferPtr) {
+    ndn::Name lsaName = interestName.getSubName(0, interestName.size() - 1);
+    uint64_t seq = interestName[-1].toNumber();
+    m_lsaStorage.erase(ndn::Name(lsaName).appendNumber(seq - 1));
+    afterFetchLsa(bufferPtr, interestName);
+    m_fetchers.erase(it);
+  });
+
+  fetcher->onError.connect([this, it, originRouter, lsaType, seqNo, faceId, attempt, interestName]
+                           (uint32_t errorCode, const std::string& msg) {
+    NLSR_LOG_DEBUG("Corridor LSA fetch error code=" << errorCode << " msg=" << msg
+                   << " name=" << interestName);
+    m_fetchers.erase(it);
+    auto delay = m_confParam.getLsaInterestLifetime();
+    if (errorCode == ndn::SegmentFetcher::ErrorCode::INTEREST_TIMEOUT) {
+      delay = 0_s;
+    }
+    m_scheduler.schedule(delay, [this, originRouter, lsaType, seqNo, faceId, attempt] {
+      fetchLsaFromFace(originRouter, lsaType, seqNo, faceId, attempt + 1);
+    });
+  });
+
   incrementInterestSentStats(lsaType);
 }
 

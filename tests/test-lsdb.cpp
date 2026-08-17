@@ -668,6 +668,36 @@ BOOST_AUTO_TEST_CASE(RefreshExpiryDoesNotTriggerSync)
   BOOST_CHECK_EQUAL(countSyncInterests(), 0);
 }
 
+BOOST_AUTO_TEST_CASE(CorridorFetchDoesNotPoisonHighestSeqNo)
+{
+  ndn::Name originRouter("/ndn/site/%C1.Router/other");
+  ndn::Name lsaName = conf.getLsaPrefix();
+  lsaName.append(originRouter.getSubName(conf.getNetwork().size()));
+  lsaName.append("ADJACENCY");
+
+  BOOST_CHECK(!lsdb.hasHighestSeqNo(lsaName));
+
+  lsdb.fetchLsaFromFace(originRouter, Lsa::Type::ADJACENCY, 999, 7);
+  advanceClocks(10_ms);
+  BOOST_CHECK(!lsdb.hasHighestSeqNo(lsaName));
+
+  advanceClocks(conf.getLsaInterestLifetime(), 6);
+  BOOST_CHECK(!lsdb.hasHighestSeqNo(lsaName));
+
+  ndn::Name legitimate = ndn::Name(lsaName).appendNumber(5);
+  face.sentInterests.clear();
+  lsdb.expressInterest(legitimate, 0, 0);
+  advanceClocks(10_ms);
+
+  bool found = false;
+  for (const auto& interest : face.sentInterests) {
+    found = found || interest.getName() == legitimate;
+  }
+  BOOST_CHECK(found);
+  BOOST_CHECK(lsdb.hasHighestSeqNo(lsaName));
+  BOOST_CHECK_EQUAL(lsdb.getHighestSeqNo(lsaName), 5);
+}
+
 BOOST_AUTO_TEST_SUITE_END() // TestLsdb
 
 } // namespace nlsr::tests

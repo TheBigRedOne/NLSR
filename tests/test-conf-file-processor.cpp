@@ -192,6 +192,7 @@ BOOST_AUTO_TEST_CASE(LinkState)
   BOOST_CHECK_EQUAL(conf.getInfoInterestInterval(), 60);
 
   BOOST_CHECK_EQUAL(conf.getAdjLsaBuildInterval(), 10);
+  BOOST_CHECK_EQUAL(conf.getCorridorPrioritisedRouting(), false);
 
   BOOST_CHECK(conf.getAdjacencyList().isNeighbor("/ndn/memphis.edu/cs/mira"));
   BOOST_CHECK(conf.getAdjacencyList().isNeighbor("/ndn/memphis.edu/cs/castor"));
@@ -310,6 +311,15 @@ BOOST_AUTO_TEST_CASE(DefaultValuesNeighbors)
   BOOST_CHECK_EQUAL(conf.getInfoInterestInterval(), static_cast<uint32_t>(HELLO_INTERVAL_DEFAULT));
   BOOST_CHECK_EQUAL(conf.getAdjLsaBuildInterval(),
                     static_cast<uint32_t>(ADJ_LSA_BUILD_INTERVAL_DEFAULT));
+}
+
+BOOST_AUTO_TEST_CASE(CorridorPrioritisedRoutingOn)
+{
+  std::string config = SECTION_NEIGHBORS;
+  boost::replace_all(config, "adj-lsa-build-interval 10",
+                     "adj-lsa-build-interval 10\n  corridor-prioritised-routing on");
+  BOOST_REQUIRE(processConfigurationString(config));
+  BOOST_CHECK_EQUAL(conf.getCorridorPrioritisedRouting(), true);
 }
 
 BOOST_AUTO_TEST_CASE(CanonizeNeighbors)
