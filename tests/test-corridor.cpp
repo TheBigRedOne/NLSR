@@ -301,6 +301,7 @@ BOOST_AUTO_TEST_CASE(SameSeqNewBranchOnlyNewFace)
 
   face.sentInterests.clear();
   corridor->noteServiceBranch(LIVE, 12);
+  advanceClocks(10_ms);
   BOOST_CHECK(hasAvailabilityTo(PRODUCER, 4, LIVE, 12));
   BOOST_CHECK(!hasAvailabilityTo(PRODUCER, 4, LIVE, 11));
 }
