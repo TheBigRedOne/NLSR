@@ -622,12 +622,11 @@ BOOST_AUTO_TEST_CASE(ReciprocalImmediateBuildDoesNotTriggerSync)
 BOOST_AUTO_TEST_CASE(OrdinaryDebounceDoesNotTriggerSync)
 {
   conf.setEventDrivenAdjacencyVerification(true);
-  conf.setAdjLsaBuildInterval(5);
   insertActiveNeighbor();
 
   lsdb.scheduleAdjLsaBuild();
   face.sentInterests.clear();
-  advanceClocks(6_s);
+  advanceClocks(lsdb.m_adjLsaBuildInterval + 1_s);
 
   BOOST_CHECK_EQUAL(lsdb.m_adjBuildCount, 0);
   BOOST_CHECK(lsdb.findLsa(conf.getRouterPrefix(), Lsa::Type::ADJACENCY) != nullptr);
