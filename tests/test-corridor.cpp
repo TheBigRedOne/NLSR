@@ -178,7 +178,9 @@ BOOST_AUTO_TEST_CASE(OwnAdjInstallAdvertisesOnActiveAdjacency)
 {
   Adjacent neighbor(PRODUCER, PRODUCER_FACE, 10, Adjacent::STATUS_ACTIVE, 0, 42);
   conf.getAdjacencyList().insert(neighbor);
-  installName(conf.getRouterPrefix(), 2, {LIVE});
+  auto ownName = lsdb->findLsa<NameLsa>(conf.getRouterPrefix());
+  BOOST_REQUIRE(ownName != nullptr);
+  installName(conf.getRouterPrefix(), ownName->getSeqNo() + 1, {LIVE});
   installAdj(conf.getRouterPrefix(), 1, conf.getAdjacencyList());
   advanceClocks(10_ms);
 
