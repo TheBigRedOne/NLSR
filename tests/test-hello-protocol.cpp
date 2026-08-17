@@ -213,6 +213,9 @@ BOOST_AUTO_TEST_CASE(StaleNackDoesNotScheduleOrMutate)
   helloProtocol.onAttachmentChangeHint();
   this->advanceClocks(10_ms);
 
+  helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].pendingInterest.cancel();
+  this->advanceClocks(10_ms);
+
   adjList.setTimedOutInterestCount(ACTIVE_NEIGHBOR, 0);
   face.sentInterests.clear();
   const uint32_t resend = conf.getInterestResendTime();
