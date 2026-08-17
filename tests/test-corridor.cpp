@@ -545,6 +545,7 @@ BOOST_AUTO_TEST_CASE(NotificationAfterEmptySnapshot)
 BOOST_AUTO_TEST_CASE(AvailabilityReplyHasZeroFreshness)
 {
   corridor->processAvailabilityInterest(makeAvailability(PRODUCER, 4, LIVE, 7));
+  advanceClocks(10_ms);
   BOOST_REQUIRE(!face.sentData.empty());
   BOOST_CHECK_EQUAL(face.sentData.back().getFreshnessPeriod(), 0_ms);
 
