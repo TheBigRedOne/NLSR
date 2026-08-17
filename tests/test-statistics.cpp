@@ -180,6 +180,7 @@ BOOST_AUTO_TEST_CASE(SendHelloInterest)
 
   // Receive Hello Data
   ndn::Name dataName = otherName;
+  dataName.appendVersion();
 
   ndn::Data data(dataName);
   hello.onContentValidated(data);
