@@ -113,6 +113,12 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
     ndn::ScopedPendingInterestHandle pendingInterest;
     ndn::scheduler::ScopedEventId nackDelayEvent;
     uint64_t flowToken = 0;
+    /*! \brief Effective Interest lifetime of the current flowToken.
+     *
+     *  Written only when a new authoritative owned flow is created. Retries
+     *  and NACK delay reuse this value; stale callbacks must not write it.
+     */
+    ndn::time::milliseconds interestLifetime{0};
   };
 
   struct MobilitySweep
@@ -134,7 +140,7 @@ PUBLIC_WITH_TESTS_ELSE_PRIVATE:
    */
   void
   onNackOwned(const ndn::Name& neighbor, const ndn::Interest& interest,
-              uint32_t seconds, bool isReciprocal, uint64_t flowToken);
+              bool isReciprocal, uint64_t flowToken);
 
   std::map<ndn::Name, AdjHelloControl> m_adjHello;
   std::optional<MobilitySweep> m_sweep;
@@ -153,6 +159,12 @@ private:
     return m_confParam.getEventDrivenAdjacencyVerification();
   }
 
+  ndn::time::milliseconds
+  vanillaHelloLifetime() const;
+
+  ndn::time::milliseconds
+  verifyNowLifetime() const;
+
   AdjHelloControl&
   getAdjControl(const ndn::Name& neighbor);
 
@@ -161,7 +173,7 @@ private:
 
   void
   expressInterestOwned(const ndn::Name& neighbor, const ndn::Name& interestName,
-                       uint32_t seconds, bool isReciprocal, uint64_t flowToken);
+                       ndn::time::milliseconds lifetime, bool isReciprocal, uint64_t flowToken);
 
   void
   sendHelloInterestVanilla(const ndn::Name& neighbor);

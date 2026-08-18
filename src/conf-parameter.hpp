@@ -95,6 +95,10 @@ enum {
 };
 
 enum {
+  EVENT_DRIVEN_VERIFICATION_TIMEOUT_MS_DEFAULT = 0
+};
+
+enum {
   HELLO_INTERVAL_MIN = 30,
   HELLO_INTERVAL_DEFAULT = 60,
   HELLO_INTERVAL_MAX =90
@@ -478,6 +482,23 @@ public:
     return m_isEventDrivenAdjacencyVerificationEnabled;
   }
 
+  /*! \brief Mobility verify-now Hello Interest lifetime in milliseconds.
+   *
+   *  0 inherits hello-timeout seconds. A positive value applies only to the
+   *  event-driven requestVerificationNow flow, not periodic or reciprocal Hello.
+   */
+  void
+  setEventDrivenVerificationTimeoutMs(uint32_t timeoutMs)
+  {
+    m_eventDrivenVerificationTimeoutMs = timeoutMs;
+  }
+
+  uint32_t
+  getEventDrivenVerificationTimeoutMs() const
+  {
+    return m_eventDrivenVerificationTimeoutMs;
+  }
+
   /*! \brief Enables one-hop corridor advertisement of ordinary verified LSAs
    *         along ServiceBranch faces.
    *
@@ -589,6 +610,7 @@ private:
 
   bool m_isResultDrivenAdjLsaBuildEnabled = false;
   bool m_isEventDrivenAdjacencyVerificationEnabled = false;
+  uint32_t m_eventDrivenVerificationTimeoutMs = EVENT_DRIVEN_VERIFICATION_TIMEOUT_MS_DEFAULT;
   bool m_isCorridorPrioritisedRoutingEnabled = false;
 
   uint32_t m_faceDatasetFetchTries;

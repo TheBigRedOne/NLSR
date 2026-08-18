@@ -96,6 +96,28 @@ public:
     return ndn::Interest(interestName);
   }
 
+  ndn::Interest
+  makeIncomingHelloInterest(const ndn::Name& neighbor) const
+  {
+    ndn::Name interestName(conf.getRouterPrefix());
+    interestName.append(HelloProtocol::NLSR_COMPONENT);
+    interestName.append(HelloProtocol::INFO_COMPONENT);
+    interestName.append(ndn::tlv::GenericNameComponent, neighbor.wireEncode());
+    return ndn::Interest(interestName);
+  }
+
+  ndn::time::milliseconds
+  lastHelloLifetime(const ndn::Name& neighbor) const
+  {
+    ndn::time::milliseconds lifetime{0};
+    for (const auto& i : face.sentInterests) {
+      if (neighbor == i.getName().getPrefix(4)) {
+        lifetime = i.getInterestLifetime();
+      }
+    }
+    return lifetime;
+  }
+
   ndn::Data
   makeHelloData(const ndn::Name& neighbor) const
   {
@@ -218,10 +240,9 @@ BOOST_AUTO_TEST_CASE(StaleNackDoesNotScheduleOrMutate)
 
   adjList.setTimedOutInterestCount(ACTIVE_NEIGHBOR, 0);
   face.sentInterests.clear();
-  const uint32_t resend = conf.getInterestResendTime();
   helloProtocol.onNackOwned(ACTIVE_NEIGHBOR, makeHelloInterest(ACTIVE_NEIGHBOR),
-                            resend, false, staleToken);
-  this->advanceClocks(ndn::time::seconds(2 * resend + 1));
+                            false, staleToken);
+  this->advanceClocks(ndn::time::seconds(2 * conf.getInterestResendTime() + 1));
   BOOST_CHECK_EQUAL(adjList.getTimedOutInterestCount(ACTIVE_NEIGHBOR), 0);
   BOOST_CHECK_EQUAL(checkHelloInterests(ACTIVE_NEIGHBOR), 0);
 }
@@ -249,8 +270,8 @@ BOOST_AUTO_TEST_CASE(StaleNackDoesNotOverwriteCurrentNackDelay)
   face.sentInterests.clear();
   const auto interest = makeHelloInterest(ACTIVE_NEIGHBOR);
 
-  helloProtocol.onNackOwned(ACTIVE_NEIGHBOR, interest, 1, false, token2);
-  helloProtocol.onNackOwned(ACTIVE_NEIGHBOR, interest, 1, false, token1);
+  helloProtocol.onNackOwned(ACTIVE_NEIGHBOR, interest, false, token2);
+  helloProtocol.onNackOwned(ACTIVE_NEIGHBOR, interest, false, token1);
 
   this->advanceClocks(2_s + 10_ms);
   // Exactly one delayed timeout from T2: count advances once and one retry is sent.
@@ -269,10 +290,12 @@ BOOST_AUTO_TEST_CASE(StaleDataIgnored)
   this->advanceClocks(10_ms);
 
   adjList.setStatusOfNeighbor(ACTIVE_NEIGHBOR, Adjacent::STATUS_INACTIVE);
+  const auto lifetimeBefore = helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime;
   helloProtocol.onContentValidated(makeHelloData(ACTIVE_NEIGHBOR), false, staleToken);
   BOOST_CHECK_EQUAL(adjList.getStatusOfNeighbor(ACTIVE_NEIGHBOR), Adjacent::STATUS_INACTIVE);
   BOOST_REQUIRE(helloProtocol.m_sweep.has_value());
   BOOST_CHECK_EQUAL(helloProtocol.m_sweep->results.count(ACTIVE_NEIGHBOR), 0);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime, lifetimeBefore);
 }
 
 BOOST_AUTO_TEST_CASE(CurrentTokenReachableIncludingActiveActive)
@@ -541,6 +564,227 @@ BOOST_AUTO_TEST_CASE(AbortStopsFurtherVerifyNow)
   BOOST_CHECK(!nlsr.m_lsdb.isAdjLsaBuildHeld());
   BOOST_CHECK(nlsr.m_lsdb.m_isBuildAdjLsaScheduled);
   BOOST_CHECK_EQUAL(checkHelloInterests(good.getName()), 0);
+}
+
+BOOST_AUTO_TEST_CASE(VerifyNowDefaultLifetimeInheritsHelloTimeout)
+{
+  conf.setEventDrivenAdjacencyVerification(true);
+  BOOST_CHECK_EQUAL(conf.getEventDrivenVerificationTimeoutMs(), 0);
+  face.sentInterests.clear();
+  helloProtocol.onAttachmentChangeHint();
+  this->advanceClocks(10_ms);
+
+  const auto expected = ndn::time::duration_cast<ndn::time::milliseconds>(
+    ndn::time::seconds(conf.getInterestResendTime()));
+  BOOST_CHECK_EQUAL(lastHelloLifetime(ACTIVE_NEIGHBOR), expected);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime, expected);
+}
+
+BOOST_AUTO_TEST_CASE(VerifyNowPositiveMsLifetime)
+{
+  conf.setEventDrivenAdjacencyVerification(true);
+  conf.setEventDrivenVerificationTimeoutMs(100);
+  face.sentInterests.clear();
+  helloProtocol.onAttachmentChangeHint();
+  this->advanceClocks(10_ms);
+
+  BOOST_CHECK_EQUAL(lastHelloLifetime(ACTIVE_NEIGHBOR), 100_ms);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime, 100_ms);
+}
+
+BOOST_AUTO_TEST_CASE(VerifyNowTimeoutRetryReusesLifetime)
+{
+  conf.setEventDrivenAdjacencyVerification(true);
+  conf.setEventDrivenVerificationTimeoutMs(100);
+  conf.setInterestRetryNumber(3);
+  helloProtocol.onAttachmentChangeHint();
+  this->advanceClocks(10_ms);
+  const uint64_t token = helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].flowToken;
+
+  helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].pendingInterest.cancel();
+  this->advanceClocks(10_ms);
+  face.sentInterests.clear();
+  helloProtocol.processInterestTimedOut(makeHelloInterest(ACTIVE_NEIGHBOR), false, token);
+  this->advanceClocks(10_ms);
+
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].flowToken, token);
+  BOOST_CHECK_EQUAL(lastHelloLifetime(ACTIVE_NEIGHBOR), 100_ms);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime, 100_ms);
+}
+
+BOOST_AUTO_TEST_CASE(VerifyNowNackDelayIsTwiceLifetime)
+{
+  conf.setEventDrivenAdjacencyVerification(true);
+  conf.setEventDrivenVerificationTimeoutMs(100);
+  conf.setInterestRetryNumber(3);
+  helloProtocol.onAttachmentChangeHint();
+  this->advanceClocks(10_ms);
+  const uint64_t token = helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].flowToken;
+
+  helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].pendingInterest.cancel();
+  this->advanceClocks(10_ms);
+  adjList.setTimedOutInterestCount(ACTIVE_NEIGHBOR, 0);
+  face.sentInterests.clear();
+  helloProtocol.onNackOwned(ACTIVE_NEIGHBOR, makeHelloInterest(ACTIVE_NEIGHBOR), false, token);
+
+  this->advanceClocks(199_ms);
+  BOOST_CHECK_EQUAL(checkHelloInterests(ACTIVE_NEIGHBOR), 0);
+  this->advanceClocks(1_ms);
+  BOOST_CHECK_EQUAL(checkHelloInterests(ACTIVE_NEIGHBOR), 1);
+  BOOST_CHECK_EQUAL(lastHelloLifetime(ACTIVE_NEIGHBOR), 100_ms);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].flowToken, token);
+}
+
+BOOST_AUTO_TEST_CASE(PeriodicOwnedHelloKeepsVanillaLifetime)
+{
+  conf.setEventDrivenAdjacencyVerification(true);
+  conf.setEventDrivenVerificationTimeoutMs(100);
+  face.sentInterests.clear();
+  helloProtocol.sendHelloInterest(ACTIVE_NEIGHBOR);
+  this->advanceClocks(10_ms);
+
+  const auto vanilla = ndn::time::duration_cast<ndn::time::milliseconds>(
+    ndn::time::seconds(conf.getInterestResendTime()));
+  BOOST_CHECK_EQUAL(lastHelloLifetime(ACTIVE_NEIGHBOR), vanilla);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime, vanilla);
+}
+
+BOOST_AUTO_TEST_CASE(ReciprocalOwnedHelloKeepsVanillaLifetime)
+{
+  conf.setEventDrivenAdjacencyVerification(true);
+  conf.setEventDrivenVerificationTimeoutMs(100);
+  Adjacent inactive("/ndn/site/%C1.Router/reciprocal-lifetime",
+                    ndn::FaceUri("udp4://10.0.0.11:6363"),
+                    10, Adjacent::STATUS_INACTIVE, 0, 311);
+  adjList.insert(inactive);
+
+  face.sentInterests.clear();
+  const auto incoming = makeIncomingHelloInterest(inactive.getName());
+  helloProtocol.processInterest(incoming.getName(), incoming);
+  this->advanceClocks(10_ms);
+
+  const auto vanilla = ndn::time::duration_cast<ndn::time::milliseconds>(
+    ndn::time::seconds(conf.getInterestResendTime()));
+  BOOST_CHECK_EQUAL(lastHelloLifetime(inactive.getName()), vanilla);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[inactive.getName()].interestLifetime, vanilla);
+}
+
+BOOST_AUTO_TEST_CASE(PeriodicSupersedesVerifyNowLifetime)
+{
+  conf.setEventDrivenAdjacencyVerification(true);
+  conf.setEventDrivenVerificationTimeoutMs(100);
+  helloProtocol.onAttachmentChangeHint();
+  this->advanceClocks(10_ms);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime, 100_ms);
+
+  face.sentInterests.clear();
+  helloProtocol.sendHelloInterest(ACTIVE_NEIGHBOR);
+  this->advanceClocks(10_ms);
+
+  const auto vanilla = ndn::time::duration_cast<ndn::time::milliseconds>(
+    ndn::time::seconds(conf.getInterestResendTime()));
+  BOOST_CHECK_EQUAL(lastHelloLifetime(ACTIVE_NEIGHBOR), vanilla);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime, vanilla);
+}
+
+BOOST_AUTO_TEST_CASE(ReciprocalSupersedesVerifyNowLifetime)
+{
+  conf.setEventDrivenAdjacencyVerification(true);
+  conf.setEventDrivenVerificationTimeoutMs(100);
+  helloProtocol.onAttachmentChangeHint();
+  this->advanceClocks(10_ms);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime, 100_ms);
+
+  adjList.setStatusOfNeighbor(ACTIVE_NEIGHBOR, Adjacent::STATUS_INACTIVE);
+  face.sentInterests.clear();
+  const auto incoming = makeIncomingHelloInterest(ACTIVE_NEIGHBOR);
+  helloProtocol.processInterest(incoming.getName(), incoming);
+  this->advanceClocks(10_ms);
+
+  const auto vanilla = ndn::time::duration_cast<ndn::time::milliseconds>(
+    ndn::time::seconds(conf.getInterestResendTime()));
+  BOOST_CHECK_EQUAL(lastHelloLifetime(ACTIVE_NEIGHBOR), vanilla);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime, vanilla);
+}
+
+BOOST_AUTO_TEST_CASE(VerifyNowSupersedesVanillaLifetime)
+{
+  conf.setEventDrivenAdjacencyVerification(true);
+  conf.setEventDrivenVerificationTimeoutMs(100);
+  helloProtocol.sendHelloInterest(ACTIVE_NEIGHBOR);
+  this->advanceClocks(10_ms);
+  const auto vanilla = ndn::time::duration_cast<ndn::time::milliseconds>(
+    ndn::time::seconds(conf.getInterestResendTime()));
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime, vanilla);
+
+  face.sentInterests.clear();
+  helloProtocol.onAttachmentChangeHint();
+  this->advanceClocks(10_ms);
+  BOOST_CHECK_EQUAL(lastHelloLifetime(ACTIVE_NEIGHBOR), 100_ms);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime, 100_ms);
+}
+
+BOOST_AUTO_TEST_CASE(StaleTimeoutDoesNotIncrementOrResend)
+{
+  conf.setEventDrivenAdjacencyVerification(true);
+  conf.setInterestRetryNumber(3);
+  helloProtocol.sendHelloInterest(ACTIVE_NEIGHBOR);
+  this->advanceClocks(10_ms);
+  const uint64_t staleToken = helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].flowToken;
+
+  helloProtocol.onAttachmentChangeHint();
+  this->advanceClocks(10_ms);
+  const auto currentLifetime = helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime;
+  helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].pendingInterest.cancel();
+  this->advanceClocks(10_ms);
+
+  adjList.setTimedOutInterestCount(ACTIVE_NEIGHBOR, 0);
+  face.sentInterests.clear();
+  helloProtocol.processInterestTimedOut(makeHelloInterest(ACTIVE_NEIGHBOR), false, staleToken);
+
+  BOOST_CHECK_EQUAL(adjList.getTimedOutInterestCount(ACTIVE_NEIGHBOR), 0);
+  BOOST_CHECK_EQUAL(checkHelloInterests(ACTIVE_NEIGHBOR), 0);
+  BOOST_CHECK_EQUAL(adjList.getStatusOfNeighbor(ACTIVE_NEIGHBOR), Adjacent::STATUS_ACTIVE);
+  BOOST_REQUIRE(helloProtocol.m_sweep.has_value());
+  BOOST_CHECK_EQUAL(helloProtocol.m_sweep->results.count(ACTIVE_NEIGHBOR), 0);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].interestLifetime, currentLifetime);
+}
+
+BOOST_AUTO_TEST_CASE(VerifyNowRetryCountUnchanged)
+{
+  conf.setEventDrivenAdjacencyVerification(true);
+  conf.setEventDrivenVerificationTimeoutMs(100);
+  conf.setInterestRetryNumber(3);
+  helloProtocol.onAttachmentChangeHint();
+  this->advanceClocks(10_ms);
+  const uint64_t token = helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].flowToken;
+
+  helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].pendingInterest.cancel();
+  this->advanceClocks(10_ms);
+  helloProtocol.processInterestTimedOut(makeHelloInterest(ACTIVE_NEIGHBOR), false, token);
+  helloProtocol.processInterestTimedOut(makeHelloInterest(ACTIVE_NEIGHBOR), false, token);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].flowToken, token);
+  BOOST_CHECK_EQUAL(adjList.getTimedOutInterestCount(ACTIVE_NEIGHBOR), 2);
+  BOOST_CHECK_EQUAL(adjList.getStatusOfNeighbor(ACTIVE_NEIGHBOR), Adjacent::STATUS_ACTIVE);
+
+  helloProtocol.processInterestTimedOut(makeHelloInterest(ACTIVE_NEIGHBOR), false, token);
+  BOOST_CHECK_EQUAL(helloProtocol.m_adjHello[ACTIVE_NEIGHBOR].flowToken, token);
+  BOOST_CHECK_EQUAL(adjList.getStatusOfNeighbor(ACTIVE_NEIGHBOR), Adjacent::STATUS_INACTIVE);
+}
+
+BOOST_AUTO_TEST_CASE(EventDrivenOffIgnoresVerificationTimeoutMs)
+{
+  BOOST_CHECK_EQUAL(conf.getEventDrivenAdjacencyVerification(), false);
+  conf.setEventDrivenVerificationTimeoutMs(100);
+  face.sentInterests.clear();
+  helloProtocol.sendHelloInterest(ACTIVE_NEIGHBOR);
+  this->advanceClocks(10_ms);
+
+  const auto vanilla = ndn::time::duration_cast<ndn::time::milliseconds>(
+    ndn::time::seconds(conf.getInterestResendTime()));
+  BOOST_CHECK_EQUAL(lastHelloLifetime(ACTIVE_NEIGHBOR), vanilla);
+  helloProtocol.onAttachmentChangeHint();
+  BOOST_CHECK(!helloProtocol.m_sweep.has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

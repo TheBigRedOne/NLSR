@@ -95,6 +95,8 @@ ConfParameter::writeLog()
                 << (m_isResultDrivenAdjLsaBuildEnabled ? "on" : "off"));
   NLSR_LOG_INFO("Event-driven adjacency verification (mobility sweep): "
                 << (m_isEventDrivenAdjacencyVerificationEnabled ? "on" : "off"));
+  NLSR_LOG_INFO("Event-driven verification timeout (ms; 0 inherits hello-timeout): "
+                << m_eventDrivenVerificationTimeoutMs);
   NLSR_LOG_INFO("Corridor-prioritised routing: "
                 << (m_isCorridorPrioritisedRoutingEnabled ? "on" : "off"));
   NLSR_LOG_INFO("Corridor Adj-LSA Sync publish delay (max deferral from first unpublished, s): "

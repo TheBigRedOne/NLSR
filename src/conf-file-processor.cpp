@@ -488,6 +488,32 @@ ConfFileProcessor::processConfSectionNeighbors(const ConfigSection& section)
   }
   m_confParam.setEventDrivenAdjacencyVerification(isEventDrivenVerificationEnabled);
 
+  // event-driven-verification-timeout-ms: Interest lifetime for mobility
+  // verify-now only. 0 or absent inherits hello-timeout seconds. Signed parse
+  // rejects negative text and malformed present values. No protocol upper bound.
+  {
+    const auto timeoutIt = section.find("event-driven-verification-timeout-ms");
+    if (timeoutIt == section.not_found()) {
+      m_confParam.setEventDrivenVerificationTimeoutMs(EVENT_DRIVEN_VERIFICATION_TIMEOUT_MS_DEFAULT);
+    }
+    else {
+      try {
+        const int timeoutMs = timeoutIt->second.get_value<int>();
+        if (timeoutMs < 0) {
+          std::cerr << "Invalid value for event-driven-verification-timeout-ms: "
+                    << timeoutMs << ". Value must be non-negative." << std::endl;
+          return false;
+        }
+        m_confParam.setEventDrivenVerificationTimeoutMs(static_cast<uint32_t>(timeoutMs));
+      }
+      catch (const std::exception& ex) {
+        std::cerr << "Invalid value for event-driven-verification-timeout-ms. "
+                  << ex.what() << std::endl;
+        return false;
+      }
+    }
+  }
+
   // corridor-prioritised-routing: one-hop ordinary LSA availability along
   // ServiceBranch faces. Off keeps Hello / sweep / Adj-LSA / PSync / TFIB.
   bool isCorridorPrioritisedRoutingEnabled = false;

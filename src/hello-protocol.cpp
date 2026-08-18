@@ -99,6 +99,23 @@ HelloProtocol::getAdjControl(const ndn::Name& neighbor)
   return m_adjHello[neighbor];
 }
 
+ndn::time::milliseconds
+HelloProtocol::vanillaHelloLifetime() const
+{
+  return ndn::time::duration_cast<ndn::time::milliseconds>(
+    ndn::time::seconds(m_confParam.getInterestResendTime()));
+}
+
+ndn::time::milliseconds
+HelloProtocol::verifyNowLifetime() const
+{
+  const uint32_t timeoutMs = m_confParam.getEventDrivenVerificationTimeoutMs();
+  if (timeoutMs > 0) {
+    return ndn::time::milliseconds(timeoutMs);
+  }
+  return vanillaHelloLifetime();
+}
+
 void
 HelloProtocol::expressInterest(const ndn::Name& interestName, uint32_t seconds,
                                bool isReciprocal)
@@ -115,7 +132,10 @@ HelloProtocol::expressInterest(const ndn::Name& interestName, uint32_t seconds,
   }
   ndn::Name neighbor = interestName.getPrefix(-3);
   auto& ctrl = getAdjControl(neighbor);
-  expressInterestOwned(neighbor, interestName, seconds, isReciprocal, ctrl.flowToken);
+  expressInterestOwned(neighbor, interestName,
+                       ndn::time::duration_cast<ndn::time::milliseconds>(
+                         ndn::time::seconds(seconds)),
+                       isReciprocal, ctrl.flowToken);
 }
 
 void
@@ -147,13 +167,14 @@ HelloProtocol::expressInterestVanilla(const ndn::Name& interestName, uint32_t se
 
 void
 HelloProtocol::expressInterestOwned(const ndn::Name& neighbor, const ndn::Name& interestName,
-                                    uint32_t seconds, bool isReciprocal, uint64_t flowToken)
+                                    ndn::time::milliseconds lifetime, bool isReciprocal,
+                                    uint64_t flowToken)
 {
   NLSR_LOG_DEBUG("Expressing Interest: " << interestName
                  << (isReciprocal ? " (reciprocal)" : "")
                  << " token=" << flowToken);
   ndn::Interest interest(interestName);
-  interest.setInterestLifetime(ndn::time::seconds(seconds));
+  interest.setInterestLifetime(lifetime);
   interest.setMustBeFresh(true);
   interest.setCanBePrefix(true);
 
@@ -163,8 +184,8 @@ HelloProtocol::expressInterestOwned(const ndn::Name& neighbor, const ndn::Name& 
     [this, isReciprocal, flowToken] (const auto& interest, const auto& data) {
       onContent(interest, data, isReciprocal, flowToken);
     },
-    [this, seconds, isReciprocal, flowToken, neighbor] (const auto& interest, const auto&) {
-      onNackOwned(neighbor, interest, seconds, isReciprocal, flowToken);
+    [this, isReciprocal, flowToken, neighbor] (const auto& interest, const auto&) {
+      onNackOwned(neighbor, interest, isReciprocal, flowToken);
     },
     [this, isReciprocal, flowToken] (const auto& interest) {
       processInterestTimedOut(interest, isReciprocal, flowToken);
@@ -175,7 +196,7 @@ HelloProtocol::expressInterestOwned(const ndn::Name& neighbor, const ndn::Name& 
 
 void
 HelloProtocol::onNackOwned(const ndn::Name& neighbor, const ndn::Interest& interest,
-                           uint32_t seconds, bool isReciprocal, uint64_t flowToken)
+                           bool isReciprocal, uint64_t flowToken)
 {
   auto& ctrl = getAdjControl(neighbor);
   // PendingInterestHandle::cancel is asynchronous; a superseded flow's NACK may
@@ -189,8 +210,9 @@ HelloProtocol::onNackOwned(const ndn::Name& neighbor, const ndn::Interest& inter
   }
 
   NDN_LOG_TRACE("Received Nack for " << interest.getName());
-  NDN_LOG_TRACE("Will treat as timeout in " << 2 * seconds << " seconds");
-  ctrl.nackDelayEvent = m_scheduler.schedule(ndn::time::seconds(2 * seconds),
+  NDN_LOG_TRACE("Will treat as timeout in " << (2 * ctrl.interestLifetime).count()
+                << " milliseconds");
+  ctrl.nackDelayEvent = m_scheduler.schedule(2 * ctrl.interestLifetime,
     [this, interest, isReciprocal, flowToken] {
       processInterestTimedOut(interest, isReciprocal, flowToken);
     });
@@ -238,6 +260,7 @@ HelloProtocol::sendHelloInterestOwned(const ndn::Name& neighbor)
   // authoritative flow for the adjacency.
   const uint64_t oldToken = ctrl.flowToken;
   ++ctrl.flowToken;
+  ctrl.interestLifetime = vanillaHelloLifetime();
   ctrl.nackDelayEvent.cancel();
   ctrl.pendingInterest.cancel();
   NLSR_LOG_DEBUG("HELLO FLOW SUPERSEDE: neighbor=" << neighbor
@@ -246,7 +269,7 @@ HelloProtocol::sendHelloInterestOwned(const ndn::Name& neighbor)
 
   if (adjacent->getFaceId() != 0) {
     auto interestName = makeHelloInterestName(adjacent->getName());
-    expressInterestOwned(neighbor, interestName, m_confParam.getInterestResendTime(),
+    expressInterestOwned(neighbor, interestName, ctrl.interestLifetime,
                          false, ctrl.flowToken);
     NLSR_LOG_DEBUG("Sending HELLO interest: " << interestName);
   }
@@ -268,6 +291,7 @@ HelloProtocol::requestVerificationNow(const ndn::Name& neighbor)
   auto& ctrl = getAdjControl(neighbor);
   const uint64_t oldToken = ctrl.flowToken;
   ++ctrl.flowToken;
+  ctrl.interestLifetime = verifyNowLifetime();
   ctrl.nackDelayEvent.cancel();
   ctrl.pendingInterest.cancel();
   ctrl.periodicEvent.cancel();
@@ -293,7 +317,7 @@ HelloProtocol::requestVerificationNow(const ndn::Name& neighbor)
   }
 
   auto interestName = makeHelloInterestName(adjacent->getName());
-  expressInterestOwned(neighbor, interestName, m_confParam.getInterestResendTime(),
+  expressInterestOwned(neighbor, interestName, ctrl.interestLifetime,
                        false, ctrl.flowToken);
   ctrl.periodicEvent = m_scheduler.schedule(
     ndn::time::seconds(m_confParam.getInfoInterestInterval()),
@@ -341,13 +365,14 @@ HelloProtocol::processInterest(const ndn::Name& name,
           auto& ctrl = getAdjControl(neighbor);
           const uint64_t oldToken = ctrl.flowToken;
           ++ctrl.flowToken;
+          ctrl.interestLifetime = vanillaHelloLifetime();
           ctrl.nackDelayEvent.cancel();
           ctrl.pendingInterest.cancel();
           NLSR_LOG_DEBUG("HELLO FLOW SUPERSEDE: neighbor=" << neighbor
                          << " oldToken=" << oldToken << " newToken=" << ctrl.flowToken
                          << " reason=reciprocal");
           expressInterestOwned(neighbor, makeHelloInterestName(neighbor),
-                               m_confParam.getInterestResendTime(), true, ctrl.flowToken);
+                               ctrl.interestLifetime, true, ctrl.flowToken);
         }
       }
     }
@@ -391,7 +416,8 @@ HelloProtocol::processInterestTimedOut(const ndn::Interest& interest, bool isRec
       expressInterestVanilla(retryName, m_confParam.getInterestResendTime(), isReciprocal);
     }
     else {
-      expressInterestOwned(neighbor, retryName, m_confParam.getInterestResendTime(),
+      auto& ctrl = getAdjControl(neighbor);
+      expressInterestOwned(neighbor, retryName, ctrl.interestLifetime,
                            isReciprocal, flowToken);
     }
   }
